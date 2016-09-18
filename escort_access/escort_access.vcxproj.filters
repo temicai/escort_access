@@ -18,9 +18,15 @@
     <ClInclude Include="escort_access.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="access_concrete.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="escort_access.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="access_concrete.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

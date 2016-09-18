@@ -1,0 +1,418 @@
+#ifndef ACCESS_CONCRETE_H
+#define ACCESS_CONCRETE_H
+
+#include <WS2tcpip.h>
+#include <WinSock2.h>
+#include <queue>
+#include <map>
+#include <string>
+
+#include "iocp_tcp_server.h"
+#define _TIMESPEC_DEFINED
+#include "pthread.h"
+#include "pfLog.hh"
+#include "zmq.h"
+#include "czmq.h"
+#include "document.h" //rapidjson
+#include "zookeeper.h"
+#include "sodium.h"
+
+#include "zk_escort.h"
+#include "escort_common.h"
+#include "escort_error.h"
+
+const char gSecret = '8';
+
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iocp_tcp_server.lib")
+#pragma comment(lib, "pthreadVC2.lib")
+#pragma comment(lib, "pfLog.lib")
+#pragma comment(lib, "libzmq.lib")
+#pragma comment(lib, "czmq.lib")
+#ifdef _DEBUG
+#pragma comment(lib, "zookeeper_d.lib")
+#else 
+#pragma comment(lib, "zookeeper.lib")
+#endif
+#pragma comment(lib, "libsodium.lib")
+
+
+namespace access_service
+{
+	enum eAppCommnad
+	{
+		E_CMD_UNDEFINE = 0,
+		E_CMD_LOGIN = 1,
+		E_CMD_LOGOUT = 2,
+		E_CMD_BIND_REPORT = 3,
+		E_CMD_UNBIND_REPORT = 4,
+		E_CMD_TASK = 5,
+		E_CMD_TASK_CLOSE = 6,
+		E_CMD_POSITION_REPORT = 7,
+		E_CMD_FLEE_REPORT = 8,
+		E_CMD_FLEE_REVOKE_REPORT = 9,
+		E_CMD_MSG_NOTIFY = 10,
+		E_CMD_KEEPALIVE = 11,
+		E_CMD_LOGIN_REPLY = 101,
+		E_CMD_LOGOUT_REPLY = 102,
+		E_CMD_BIND_REPLY = 103,
+		E_CMD_UNBIND_REPLY = 104,
+		E_CMD_TASK_REPLY = 105,
+		E_CMD_TAKK_CLOSE_REPLY = 106,
+		E_CMD_FLEE_REPLY = 108,
+		E_CMD_FLEE_REVOKE_REPLY = 109,
+		E_CMD_KEEPALIVE_REPLY = 111,
+	};
+
+	enum eAppTaskType
+	{
+		E_TASK_ESCORT = 1,
+		E_TASK_MEDICAL = 2,
+		E_TASK_TESTIFY = 3,
+	};
+
+	enum eAppNotifyMessageType
+	{
+		E_ALARM_DEVICE_LOWPOWER = 1,
+		E_ALARM_DEVICE_LOOSE = 2,
+		E_NOTIFY_DEVICE_POSITION = 3,
+		E_NOTIFY_DEVICE_ONLINE = 4,
+		E_NOTIFY_DEVICE_OFFLINE = 5,
+		E_NOTIFY_DEVICE_BATTERY = 6,
+	};
+
+	typedef struct tagLogContext
+	{
+		char * pLogData;
+		unsigned int uiDataLen;
+		int nLogCategory;
+		int nLogType;
+		tagLogContext()
+		{
+			uiDataLen = 0;
+			pLogData = NULL;
+			nLogCategory = 0;
+			nLogType = 0;
+		}
+		~tagLogContext()
+		{
+			if (uiDataLen && pLogData) {
+				free(pLogData);
+				pLogData = NULL;
+				uiDataLen = 0;
+			}
+		}
+	} LogContext;
+
+	typedef struct tagAppMessageHead
+	{
+		char marker[2];
+		char version[2];
+		unsigned int uiDataLen;
+	} AppMessageHead;
+
+	typedef struct tagLinkData
+	{
+		char szLinkId[32];
+		int nLinkState; // 0: on, 1: off
+		unsigned long ulTotalDataLen;
+		unsigned long ulLingeDataLen; //
+		unsigned long ulLackDataLen;	//
+		unsigned char * pLingeData;		//
+		tagLinkData() 
+		{
+			szLinkId[0] = '\0';
+			nLinkState = 0;
+			ulTotalDataLen = 0;
+			ulLingeDataLen = 0;
+			ulLackDataLen = 0;
+			pLingeData = NULL;
+		}
+		~tagLinkData() {}
+	} LinkDataInfo;
+
+	typedef struct tagAppLogin
+	{
+		unsigned int uiReqSeq;
+		char szUser[20];
+		char szPasswd[64];
+		char szDateTime[16];
+	} AppLoginInfo;
+
+	typedef struct tagAppLogout
+	{
+		unsigned int uiReqSeq;
+		char szSession[20];
+		char szDateTime[16];
+	} AppLogoutInfo;
+
+	typedef struct tagAppBind
+	{
+		unsigned int uiReqSeq;
+		char szSesssion[20];
+		char szFactoryId[4];
+		char szDeviceId[16];
+		char szDateTime[16];
+		int nMode; //0-bind 1-unbind;
+	} AppBindInfo;
+
+	typedef struct tagAppSubmitTask
+	{
+		unsigned int uiReqSeq;
+		char szSession[20];
+		unsigned short usTaskType;
+		unsigned short usTaskLimit;
+		char szDestination[32];
+		char szTarget[64];
+		char szDatetime[16];
+	} AppSubmitTaskInfo;
+
+	typedef struct tagAppCloseTask
+	{
+		unsigned int uiReqSeq;
+		char szSession[20];
+		char szTaskId[12];
+		int nCloseType; //0-normal,1-linge
+		char szDatetime[16];
+	} AppCloseTaskInfo;
+
+	typedef struct tagAppPosition
+	{
+		unsigned int uiReqSeq;
+		char szSession[20];
+		char szTaskId[12];
+		double dLat;
+		double dLng;
+		char szDatetime[16];
+	} AppPositionInfo;
+
+	typedef struct tagAppSubmitFlee
+	{
+		unsigned int uiReqSeq;
+		char szSession[20];
+		char szTaskId[12];
+		char szDatetime[16];
+		int nMode; // 0-flee 1-flee revoke
+	} AppSubmitFleeInfo;
+
+	typedef struct tagAppKeepAlive
+	{
+		char szSession[20];
+		unsigned int uiSeq;
+		char szDatetime[16];
+	} AppKeepAlive;
+
+	typedef struct tagAppLinkInfo
+	{
+		char szSession[20];
+		char szGuarder[20];	
+		char szEndpoint[40];
+		char szFactoryId[4];
+		char szDeviceId[16];
+		char szOrg[10];
+		char szTaskId[12];
+		int nActivated;//0:false, 1:true
+		unsigned long ulActivateTime;
+		tagAppLinkInfo()
+		{
+			szSession[0] = '\0';
+			szSession[0] = '\0';
+			szEndpoint[0] = '\0';
+			szFactoryId[0] = '\0';
+			szDeviceId[0] = '\0';
+			szOrg[0] = '\0';
+			szTaskId[0] = '\0';
+			nActivated = 0;
+			ulActivateTime = 0;
+		}
+	} AppLinkInfo;
+
+	typedef struct tagSubscribeInfo
+	{
+		char szSubFilter[64];
+		char szSession[20];
+		char szGuarder[20];
+		char szEndpoint[40];
+		tagSubscribeInfo()
+		{
+			szSubFilter[0] = '\0';
+			szSession[0] = '\0';
+			szGuarder[0] = '\0';
+			szEndpoint[0] = '\0';
+		}
+	} AppSubscirbeInfo;
+
+	typedef struct tagRemoteLinkInfo
+	{
+		int nActive; //0-false,1-true
+		unsigned long ulLastActiveTime; //default 0
+		tagRemoteLinkInfo()
+		{
+			nActive = 0;
+			ulLastActiveTime = 0;
+		}
+	} RemoteLinkInfo;
+
+
+}
+
+//part1: connect and deal with app
+//part2: connect and deal with msg-midware
+//part3: data handle with content
+class AccessService
+{
+public:
+	AccessService(const char * pZkHost, const char * pRoot);
+	~AccessService();
+	int StartAccessService(unsigned short usServicePort);
+	int StopAccessService();
+	void SetLogType(int nLogType);
+protected:
+	void initLog();
+	bool addLog(access_service::LogContext * pLog);
+	void writeLog(const char * pLogContent, int nLogCategoryType, int nLogType);
+	void dealLog();
+
+	bool addAppMsg(MessageContent * pMsg);
+	void dealAppMsg();
+	void parseAppMsg(MessageContent * pMsg);
+	int getWholeMessage(const unsigned char * pData, unsigned long ulDataLen, unsigned long ulIndex, 
+		unsigned long & ulBeginIndex, unsigned long & ulEndIndex, unsigned int & uiUnitLen);
+	void decryptMessage(unsigned char * pData, unsigned long ulBeginIndex, unsigned long ulEndIndex);
+	void encryptMessage(unsigned char * pData, unsigned long ulBeginIndex, unsigned long ulEndIndex);
+	void handleAppLogin(access_service::AppLoginInfo loginInfo, const char *, unsigned long);
+	void handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char *, unsigned long);
+	void handleAppBind(access_service::AppBindInfo bindInfo, const char *, unsigned long);
+	void handleAppSubmitTask(access_service::AppSubmitTaskInfo taskInfo, const char *, unsigned long);
+	void handleAppCloseTask(access_service::AppCloseTaskInfo taskInfo, const char *, unsigned long);
+	void handleAppPosition(access_service::AppPositionInfo positionInfo, const char *, unsigned long);
+	void handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, const char *, unsigned long);
+	void handleAppKeepAlive(access_service::AppKeepAlive keepAlive, const char *, unsigned long);
+	unsigned int getNextRequestSequence();
+	int generateSession(char * pSession, size_t nSize);
+	void generateTaskId(char * pTaskId, size_t nSize);
+	void changeDeviceStatus(unsigned short usNewStatus, unsigned short & usDeviceStatus, int nMode = 0);
+	bool addTopicMsg(TopicMessage * pMsg);
+	void dealTopicMsg();
+	void storeTopicMsg(const TopicMessage * pMsg);
+	bool addInteractionMsg(InteractionMessage * pMsg);
+	void dealInteractionMsg();
+	int handleTopicAliveMsg(TopicAliveMessage * pMsg, const char *);
+	int handleTopicOnlineMsg(TopicOnlineMessage * pMsg, const char *);
+	int handleTopicOfflineMsg(TopicOfflineMessage * pMsg, const char *);
+	int handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const char *);
+	int handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const char *);
+	int handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg, const char *);
+	int handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const char *);
+	
+	void initZookeeper();
+	int completForMaster();
+	void masterExist();
+	int setAccessData(const char * pPath, void * pData, size_t nDataSize);
+	int runAsSlaver();
+	void removeSlaver();
+
+
+	int sendDatatoEndpoint(const char * pData, size_t nDataLen, const char * pEndpoint);
+	int sendDataViaInteractor(const char * pData, size_t nDataLen);
+	
+	
+	void dealNetwork();
+	void handleLinkDisconnect(const char * pEndpoint);
+	
+	friend void * dealAppMsgThread(void *);
+	friend void * dealTopicMsgThread(void *);
+	friend void * dealInteractionMsgThread(void *);
+	friend void * dealNetworkThread(void *);
+	friend void * dealLogThread(void *);
+	
+	//friend void * deal
+	friend void * superviseThread(void *);
+	friend int supervise(zloop_t * loop, int timer_id, void * arg);
+	friend int cycleFunc(zloop_t * loop, int timer_id, void * arg);
+	friend void __stdcall fMsgCb(int nType, void * pMsg, void * pUserData);
+	friend void zk_server_watcher(zhandle_t * zh, int type, int state, const char * path, void * watcherCtx);
+	friend void zk_escort_create_completion(int rc, const char * name, const void * data);
+	friend void zk_access_create_completion(int rc, const char * name, const void * data);
+	friend void zk_access_master_create_completion(int rc, const char * name, const void * data);
+	friend void zk_access_master_exists_watcher(zhandle_t * zh, int type, int state, const char * path, void * watcherCtx);
+	friend void zk_access_master_exists_completion(int rc, const Stat * stat, const void * data);
+	friend void zk_access_set_completion(int rc, const struct Stat * stat, const void * data);
+	friend void zk_access_slaver_create_completion(int rc, const char * name, const void * data);
+private:
+	unsigned int m_uiSrvInst;
+	int m_nRun;
+	unsigned short m_usSrvPort;
+	
+	pthread_t m_pthdLog;
+	pthread_mutex_t m_mutex4LogQueue;
+	pthread_cond_t m_cond4LogQueue;
+	std::queue<access_service::LogContext *> m_logQueue;
+	long m_nLogType;
+	long m_nLogInst;
+	char m_szLogRoot[256];
+	
+	zctx_t * m_ctx;
+	void * m_subscirber;		//订阅者
+	void * m_interactor;		//交互者
+	pthread_t m_pthdNetwork;	//网络通信
+
+	zhandle_t * m_zkHandle;
+	char m_szHost[512];
+	char m_zkNodePath[256];
+	bool m_bConnectZk; 
+	ZkAccess m_zkAccess;
+
+	//message from app
+	pthread_mutex_t m_mutex4AppMsgQueue;
+	pthread_cond_t m_cond4AppMsgQueue;
+	std::queue<MessageContent *> m_appMsgQueue;
+	pthread_t m_pthdAppMsg;		//App消息线程
+	pthread_mutex_t m_mutex4LinkDataList;
+	std::map<std::string, access_service::LinkDataInfo *> m_linkDataList; //用来记录连接的数据情况 key:session 
+	
+	pthread_mutex_t m_mutex4LinkList; //连接
+	zhash_t * m_linkList; //key: session, value: AppLinkInfo *
+	pthread_mutex_t m_mutex4SubscribeList;
+	zhash_t * m_subscribeList;	//订阅  key:sub_filter|topic, value: AppSubscribeInfo *
+	pthread_mutex_t m_mutex4LocalTopicMsgList;
+	zlist_t * m_localTopicMsgList;	//
+
+	pthread_t m_pthdSupervisor;  //supervisor all the links 
+	zloop_t * m_loop;
+	int m_nTimer4Supervise;
+	int m_nTimer4CycleTask;
+	int m_nTimerCount; //
+	pthread_mutex_t m_mutex4RemoteLink;
+	access_service::RemoteLinkInfo m_remoteSrvLinkInfo;
+	
+	pthread_t m_pthdTopicMsg;		//Topic Message from subscribe
+	pthread_t m_pthdInteractionMsg;		//message from interactor
+	pthread_mutex_t m_mutex4TopicMsgQueue;
+	pthread_mutex_t m_mutex4InteractionMsgQueue;
+	pthread_cond_t m_cond4TopicMsgQueue;
+	pthread_cond_t m_cond4InteractionMsgQueue;
+	std::queue<TopicMessage *> m_topicMsgQueue;
+	std::queue<InteractionMessage *> m_interactionMsgQueue;
+
+
+
+	static unsigned int g_uiRequestSequence;
+	static int g_nRefCount;
+	static pthread_mutex_t g_mutex4RequestSequence;
+	static pthread_mutex_t g_mutex4TaskId;
+	//buffer date list: guarderList, deviceList, taskList
+	static zhash_t * g_guarderList; //key: guarderId, value: Guarder  all guarder without deactivate
+	static pthread_mutex_t g_mutex4GuarderList;
+	static zhash_t * g_deviceList; //key: deviceId, all device without deactivate 
+	static pthread_mutex_t g_mutex4DevList;
+	static zhash_t * g_taskList; //key: taskId , unfinish|executing tasks
+	static pthread_mutex_t g_mutex4TaskList; 
+
+};
+
+
+
+
+
+#endif

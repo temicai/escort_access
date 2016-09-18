@@ -71,6 +71,8 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
+    <TargetName>$(ProjectName)_x86</TargetName>
+    <RunCodeAnalysis>true</RunCodeAnalysis>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
@@ -89,10 +91,13 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;ESCORT_ACCESS_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
+      <AdditionalIncludeDirectories>..\inc;C:\D\Apps\SelfApps\vs2015\Escort\include\escort;C:\D\Apps\SelfApps\vs2015\Escort\include\pthread;C:\D\Apps\SelfApps\vs2015\Escort\include\zeromq;C:\D\Apps\SelfApps\vs2015\Escort\include\czmq;C:\D\Apps\SelfApps\vs2015\Escort\include\zookeeper;C:\D\Apps\SelfApps\vs2015\Escort\include\rapidjson;C:\D\Apps\SelfApps\vs2015\Escort\include\pfLog;C:\D\Apps\SelfApps\vs2015\Escort\include\sodium;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <EnablePREfast>true</EnablePREfast>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>..\lib\debug;C:\D\Apps\SelfApps\vs2015\Escort\lib\debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -146,9 +151,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="access_concrete.h" />
     <ClInclude Include="escort_access.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="access_concrete.cc" />
     <ClCompile Include="escort_access.cc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
