@@ -11,10 +11,10 @@ extern "C"
 #else 
 #define EAAPI __declspec(dllexport)
 #endif
-
-	EAAPI unsigned int __stdcall EA_Start(const char * pZkHost, unsigned short usAccessPort);
+	EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName = 0);
 	EAAPI int __stdcall EA_Stop(unsigned int);
 	EAAPI int __stdcall EA_SetLogType(unsigned int, int);
+	EAAPI int __stdcall EA_GetStatus(unsigned int);
 
 #ifdef __cplusplus
 }

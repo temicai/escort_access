@@ -20,6 +20,7 @@
 #include "zk_escort.h"
 #include "escort_common.h"
 #include "escort_error.h"
+#include "EscortDbCommon.h"
 
 const char gSecret = '8';
 
@@ -116,12 +117,14 @@ namespace access_service
 		char szLinkId[32];
 		int nLinkState; // 0: on, 1: off
 		unsigned long ulTotalDataLen;
-		unsigned long ulLingeDataLen; //
-		unsigned long ulLackDataLen;	//
-		unsigned char * pLingeData;		//
+		unsigned long ulLingeDataLen; 
+		unsigned long ulLackDataLen;	
+		unsigned char * pLingeData;		
+		char szUser[20];
 		tagLinkData() 
 		{
 			szLinkId[0] = '\0';
+			szUser[0] = '\0';
 			nLinkState = 0;
 			ulTotalDataLen = 0;
 			ulLingeDataLen = 0;
@@ -137,6 +140,13 @@ namespace access_service
 		char szUser[20];
 		char szPasswd[64];
 		char szDateTime[16];
+		tagAppLogin()
+		{
+			uiReqSeq = 0;
+			szUser[0] = '\0';
+			szPasswd[0] = '\0';
+			szDateTime[0] = '\0';
+		}
 	} AppLoginInfo;
 
 	typedef struct tagAppLogout
@@ -154,6 +164,15 @@ namespace access_service
 		char szDeviceId[16];
 		char szDateTime[16];
 		int nMode; //0-bind 1-unbind;
+		tagAppBind()
+		{
+			uiReqSeq = 0;
+			szSesssion[0] = '\0';
+			szFactoryId[0] = '\0';
+			szDeviceId[0] = '\0';
+			szDateTime[0] = '\0';
+			nMode = 0;
+		}
 	} AppBindInfo;
 
 	typedef struct tagAppSubmitTask
@@ -200,6 +219,12 @@ namespace access_service
 		char szSession[20];
 		unsigned int uiSeq;
 		char szDatetime[16];
+		tagAppKeepAlive()
+		{
+			szSession[0] = '\0';
+			uiSeq = 0;
+			szDatetime[0] = '\0';
+		}
 	} AppKeepAlive;
 
 	typedef struct tagAppLinkInfo
@@ -209,7 +234,7 @@ namespace access_service
 		char szEndpoint[40];
 		char szFactoryId[4];
 		char szDeviceId[16];
-		char szOrg[10];
+		char szOrg[40];
 		char szTaskId[12];
 		int nActivated;//0:false, 1:true
 		unsigned long ulActivateTime;
@@ -264,9 +289,12 @@ class AccessService
 public:
 	AccessService(const char * pZkHost, const char * pRoot);
 	~AccessService();
-	int StartAccessService(unsigned short usServicePort);
+	int StartAccessService(const char * pHost, unsigned short usServicePort, const char * pMidwareHost,
+		unsigned short usPublishPort, unsigned short usContactPort, const char * pDbProxyHost,
+		unsigned short usQueryPort);
 	int StopAccessService();
 	void SetLogType(int nLogType);
+	int GetStatus();
 protected:
 	void initLog();
 	bool addLog(access_service::LogContext * pLog);
@@ -306,20 +334,21 @@ protected:
 	int handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const char *);
 	
 	void initZookeeper();
-	int completForMaster();
+	int competeForMaster();
 	void masterExist();
 	int setAccessData(const char * pPath, void * pData, size_t nDataSize);
 	int runAsSlaver();
 	void removeSlaver();
-
+	int getMidwareData(const char * pPath, ZkMidware * pData);
 
 	int sendDatatoEndpoint(const char * pData, size_t nDataLen, const char * pEndpoint);
 	int sendDataViaInteractor(const char * pData, size_t nDataLen);
-	
-	
+		
 	void dealNetwork();
 	void handleLinkDisconnect(const char * pEndpoint);
 	
+	void readDataBuffer();
+
 	friend void * dealAppMsgThread(void *);
 	friend void * dealTopicMsgThread(void *);
 	friend void * dealInteractionMsgThread(void *);
@@ -329,7 +358,6 @@ protected:
 	//friend void * deal
 	friend void * superviseThread(void *);
 	friend int supervise(zloop_t * loop, int timer_id, void * arg);
-	friend int cycleFunc(zloop_t * loop, int timer_id, void * arg);
 	friend void __stdcall fMsgCb(int nType, void * pMsg, void * pUserData);
 	friend void zk_server_watcher(zhandle_t * zh, int type, int state, const char * path, void * watcherCtx);
 	friend void zk_escort_create_completion(int rc, const char * name, const void * data);
@@ -353,8 +381,9 @@ private:
 	char m_szLogRoot[256];
 	
 	zctx_t * m_ctx;
-	void * m_subscirber;		//订阅者
-	void * m_interactor;		//交互者
+	void * m_subscriber;	//订阅者
+	void * m_interactor;	//交互者
+	void * m_seeker;			//咨询者
 	pthread_t m_pthdNetwork;	//网络通信
 
 	zhandle_t * m_zkHandle;
@@ -369,22 +398,22 @@ private:
 	std::queue<MessageContent *> m_appMsgQueue;
 	pthread_t m_pthdAppMsg;		//App消息线程
 	pthread_mutex_t m_mutex4LinkDataList;
-	std::map<std::string, access_service::LinkDataInfo *> m_linkDataList; //用来记录连接的数据情况 key:session 
+	std::map<std::string, access_service::LinkDataInfo *> m_linkDataList; //用来记录连接的数据情况 key:linkId 
 	
 	pthread_mutex_t m_mutex4LinkList; //连接
 	zhash_t * m_linkList; //key: session, value: AppLinkInfo *
 	pthread_mutex_t m_mutex4SubscribeList;
 	zhash_t * m_subscribeList;	//订阅  key:sub_filter|topic, value: AppSubscribeInfo *
 	pthread_mutex_t m_mutex4LocalTopicMsgList;
-	zlist_t * m_localTopicMsgList;	//
+	zlist_t * m_localTopicMsgList;	//TopicMessage
 
 	pthread_t m_pthdSupervisor;  //supervisor all the links 
 	zloop_t * m_loop;
 	int m_nTimer4Supervise;
-	int m_nTimer4CycleTask;
-	int m_nTimerCount; //
+	int m_nTimerTickCount; //
 	pthread_mutex_t m_mutex4RemoteLink;
-	access_service::RemoteLinkInfo m_remoteSrvLinkInfo;
+	access_service::RemoteLinkInfo m_remoteMsgSrvLink; 
+	access_service::RemoteLinkInfo m_remoteProxyLink;
 	
 	pthread_t m_pthdTopicMsg;		//Topic Message from subscribe
 	pthread_t m_pthdInteractionMsg;		//message from interactor
@@ -408,6 +437,7 @@ private:
 	static pthread_mutex_t g_mutex4DevList;
 	static zhash_t * g_taskList; //key: taskId , unfinish|executing tasks
 	static pthread_mutex_t g_mutex4TaskList; 
+	static BOOL g_bInitBuffer;
 
 };
 
