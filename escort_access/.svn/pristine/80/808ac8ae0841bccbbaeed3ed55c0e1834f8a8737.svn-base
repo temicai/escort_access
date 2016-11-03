@@ -1,0 +1,6 @@
+LIBRARY
+EXPORTS
+	EA_Start @1
+	EA_Stop @2
+	EA_SetLogType @3
+	EA_GetStatus @4
