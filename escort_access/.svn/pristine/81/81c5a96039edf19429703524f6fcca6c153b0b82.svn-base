@@ -345,6 +345,7 @@ AccessService::AccessService(const char * pZkHost, const char * pRoot)
 		strncpy_s(m_szLogRoot, sizeof(m_szLogRoot), pRoot, strlen(pRoot));
 	}
 	initLog();
+
 }
 
 AccessService::~AccessService()
@@ -407,6 +408,7 @@ AccessService::~AccessService()
 		zookeeper_close(m_zkHandle);
 		m_zkHandle = NULL;
 	}
+
 	if (m_ctx) {
 		zctx_destroy(&m_ctx);
 	}
@@ -1340,69 +1342,9 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 								}
 								break;
 							}
-							case access_service::E_CMD_MODIFY_PASSWD: {
-								if (doc.HasMember("session") && doc.HasMember("currPasswd") && doc.HasMember("newPasswd")
-									&& doc.HasMember("datetime")) {
-									access_service::AppModifyPassword modifyPasswd;
-									bool bValidSession = false;
-									bool bValidCurrPasswd = false;
-									bool bValidNewPasswd = false;
-									bool bValidDatetime = false;
-									if (doc["session"].IsString()) {
-										size_t nSize = doc["session"].GetStringLength();
-										if (nSize) {
-											strncpy_s(modifyPasswd.szSession, sizeof(modifyPasswd.szSession),
-												doc["session"].GetString(), nSize);
-											bValidSession = true;
-										}
-									}
-									if (doc["currPasswd"].IsString()) {
-										size_t nSize = doc["currPasswd"].GetStringLength();
-										if (nSize) {
-											strncpy_s(modifyPasswd.szCurrPassword, sizeof(modifyPasswd.szCurrPassword),
-												doc["currPasswd"].GetString(), nSize);
-											bValidCurrPasswd = true;
-										}
-									}
-									if (doc["newPasswd"].IsString()) {
-										size_t nSize = doc["newPasswd"].GetStringLength();
-										if (nSize) {
-											strncpy_s(modifyPasswd.szNewPassword, sizeof(modifyPasswd.szNewPassword),
-												doc["newPasswd"].GetString(), nSize);
-											bValidNewPasswd = true;
-										}
-									}
-									if (doc["datetime"].IsString()) {
-										size_t nSize = doc["datetime"].GetStringLength();
-										if (nSize) {
-											strncpy_s(modifyPasswd.szDatetime, sizeof(modifyPasswd.szDatetime),
-												doc["datetime"].GetString(), nSize);
-											bValidDatetime = true;
-										}
-									}
-									if (bValidSession && bValidCurrPasswd && bValidNewPasswd && bValidDatetime) {
-										modifyPasswd.uiSeq = getNextRequestSequence();
-										handleAppModifyAccountPassword(modifyPasswd, pMsg->szEndPoint, pMsg->ulMsgTime);
-									}
-									else {
-										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]modify passwd from %s, one or more "
-											"parameter needed, session=%s, currPasswd=%s, newPasswd=%s, datetime=%s\r\n",
-											__FUNCTION__, __LINE__, pMsg->szEndPoint, bValidSession ? modifyPasswd.szSession : "null",
-											bValidCurrPasswd ? modifyPasswd.szCurrPassword : "null",
-											bValidNewPasswd ? modifyPasswd.szNewPassword : "null",
-											bValidDatetime ? modifyPasswd.szDatetime : "null");
-										writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
-									}
-								}
-								else {
-									snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]modify passwd from %s, JSON data format"
-										" error\r\n", __FUNCTION__, __LINE__, pMsg->szEndPoint);
-									writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
-								}
-							}
 							default: {
-								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]can't recognise command: %d\r\n", 
-									__FUNCTION__, __LINE__, nCmd);
+								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]can't recognise command: %d\r\n", __FUNCTION__,
+									__LINE__, nCmd);
 								writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
 								break;
 							}
@@ -2157,9 +2099,6 @@ void AccessService::handleAppSubmitTask(access_service::AppSubmitTaskInfo taskIn
 			nErr = E_INVALIDSESSION;
 		}
 	}
-	else {
-		nErr = E_INVALIDSESSION;
-	}
 	pthread_mutex_unlock(&m_mutex4LinkList);
 	if (bValidLink) {
 		pthread_mutex_lock(&g_mutex4GuarderList);
@@ -2614,103 +2553,23 @@ void AccessService::handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, co
 	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 }
 
-void AccessService::handleAppKeepAlive(access_service::AppKeepAlive keepAlive_, const char * pEndpoint_, 
-	unsigned long ulTime_)
+void AccessService::handleAppKeepAlive(access_service::AppKeepAlive keepAlive, const char * pEndpoint, 
+	unsigned long ulTime)
 {
 	char szReply[256] = { 0 };
 	snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu}",
-		access_service::E_CMD_KEEPALIVE_REPLY, keepAlive_.szSession, keepAlive_.uiSeq);
-	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint_);
+		access_service::E_CMD_KEEPALIVE_REPLY, keepAlive.szSession, keepAlive.uiSeq);
+	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint);
 	pthread_mutex_lock(&m_mutex4LinkList);
 	if (zhash_size(m_linkList)) {
 		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
-			keepAlive_.szSession);
+			keepAlive.szSession);
 		if (pLink) {
 			pLink->nActivated = 1;
-			pLink->ulActivateTime = ulTime_;
+			pLink->ulActivateTime = ulTime;
 		}
 	}
 	pthread_mutex_unlock(&m_mutex4LinkList);
-	char szLog[256] = { 0 };
-	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report keep alive, from=%s, session=%s, seq=%u, "
-		"datetime=%s\r\n", __FUNCTION__, __LINE__, pEndpoint_, keepAlive_.szSession, keepAlive_.uiSeq,
-		keepAlive_.szDatetime);
-	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
-}
-
-void AccessService::handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd_,
-	const char * pEndpoint_, unsigned long ulTime_)
-{
-	char szLog[512] = { 0 };
-	char szReply[256] = { 0 };
-	int nErr = E_OK;
-	bool bValidLink = false;
-	char szGuarder[20] = { 0 };
-	pthread_mutex_lock(&m_mutex4LinkList);
-	if (zhash_size(m_linkList)) {
-		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, 
-			modifyPasswd_.szSession);
-		if (pLink) {
-			if (pLink->nActivated == 0) {
-				pLink->nActivated = 1;
-			}
-			pLink->ulActivateTime = ulTime_;
-			strncpy_s(szGuarder, sizeof(szGuarder), pLink->szGuarder, strlen(pLink->szGuarder));
-			bValidLink = true;
-		}
-		else {
-			nErr = E_INVALIDSESSION;
-		}
-	}
-	else {
-		nErr = E_INVALIDSESSION;
-	}
-	pthread_mutex_unlock(&m_mutex4LinkList);
-	if (bValidLink) {
-		if (strcmp(modifyPasswd_.szCurrPassword, modifyPasswd_.szNewPassword) != 0) {
-			pthread_mutex_lock(&g_mutex4GuarderList);
-			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
-			if (pGuarder) {
-				if (strcmp(pGuarder->szPassword, modifyPasswd_.szCurrPassword) == 0) {
-					strncpy_s(pGuarder->szPassword, sizeof(pGuarder->szPassword), modifyPasswd_.szNewPassword,
-						strlen(modifyPasswd_.szNewPassword));
-				}
-				else {
-					nErr = E_INVALIDPASSWD;
-					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]modify passwd from %s, account=%s,"
-						" datetime=%s, current password is incorrect, can not execute modify, input=%s\r\n", 
-						__FUNCTION__, __LINE__, pEndpoint_, szGuarder, modifyPasswd_.szDatetime, 
-						modifyPasswd_.szCurrPassword);
-					writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4GuarderList);
-		}
-		else {
-			nErr = E_INVALIDPASSWD;
-			snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]modify passwd from %s, account=%s, "
-				"datetime=%s, new password is same with the current password, nothing to modify\r\n",
-				__FUNCTION__, __LINE__, pEndpoint_, szGuarder, modifyPasswd_.szDatetime);
-			writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
-		}
-	}
-	snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"retcode\":%d,\"datetime\""
-		":\"%s\"}", access_service::E_CMD_MODIFY_PASSWD_REPLY, modifyPasswd_.szSession, nErr, 
-		modifyPasswd_.szDatetime);
-	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint_);
-	if (nErr == E_OK) {
-		char szMsgBody[512] = { 0 };
-		snprintf(szMsgBody, sizeof(szMsgBody), "{\"mark\":\"EC\",\"version\":\"10\",\"type\":%d,"
-			"\"sequence\":%u,\"datetime\":\"%s\",\"report\":[{\"subType\":%d,\"guarder\":\"%s\","
-			"\"currPasswd\":\"%s\",\"newPasswd\":\"%s\"}]}", MSG_SUB_REPORT, modifyPasswd_.uiSeq,
-			modifyPasswd_.szDatetime, SUB_REPORT_MODIFY_USER_PASSWD, szGuarder,
-			modifyPasswd_.szCurrPassword, modifyPasswd_.szNewPassword);
-		sendDataViaInteractor(szMsgBody, strlen(szMsgBody));	
-	}
-	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report modify password from %s, session=%s,"
-		" seq=%u, datetime=%s, result=%d\r\n", __FUNCTION__, __LINE__, pEndpoint_,
-		modifyPasswd_.szSession, modifyPasswd_.uiSeq, modifyPasswd_.szDatetime, nErr);
-	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 }
 
 unsigned int AccessService::getNextRequestSequence()
@@ -3535,11 +3394,6 @@ void AccessService::dealTopicMsg()
 										}
 									}
 								}
-								if (doc.HasMember("battery")) {
-									if (doc["battery"].IsInt()) {
-										device.deviceBasic.nBattery = (unsigned short)doc["battery"].GetInt();
-									}
-								}
 								if (doc.HasMember("datetime")) {
 									if (doc["datetime"].IsString()) {
 										size_t nSize = doc["datetime"].GetStringLength();
@@ -3628,20 +3482,19 @@ void AccessService::dealTopicMsg()
 												strncpy_s(pDevice->szOrganization, sizeof(pDevice->szOrganization),
 													device.szOrganization, strlen(device.szOrganization));
 											}
-											pDevice->deviceBasic.nBattery = device.deviceBasic.nBattery;
 											snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]Topic Buffer modify message, "
-												"object=%u, operate=%u, deviceId=%s, factoryId=%s, orgId=%s, battery=%u, datetime="
-												"%s\r\n", __FUNCTION__, __LINE__, BUFFER_DEVICE, BUFFER_OPERATE_UPDATE,
+												"object=%u, operate=%u, deviceId=%s, factoryId=%s, orgId=%s, datetime=%s\r\n",
+												__FUNCTION__, __LINE__, BUFFER_DEVICE, BUFFER_OPERATE_UPDATE,
 												device.deviceBasic.szDeviceId, device.deviceBasic.szFactoryId,
-												device.szOrganization, device.deviceBasic.nBattery, szDatetime);
+												device.szOrganization, szDatetime);
 											writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 										}
 										else {
 											snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]Topic Buffer modify message,"
-												"object=%u, operate=%u, deviceId=%s, factoryId=%s, orgId=%s, battery=%u,datetime=%s,"
-												" not find int the deviceList\r\n", __FUNCTION__, __LINE__, BUFFER_DEVICE, 
-												BUFFER_OPERATE_UPDATE, device.deviceBasic.szDeviceId, device.deviceBasic.szFactoryId,
-												device.szOrganization, device.deviceBasic.nBattery, szDatetime);
+												"object=%u, operate=%u, deviceId=%s, factoryId=%s, orgId=%s, datetime=%s, not "
+												"find int the deviceList\r\n", __FUNCTION__, __LINE__, BUFFER_DEVICE, 
+												BUFFER_OPERATE_UPDATE, device.deviceBasic.szDeviceId, 
+												device.deviceBasic.szFactoryId, device.szOrganization, szDatetime);
 											writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 										}
 										pthread_mutex_unlock(&g_mutex4DevList);
@@ -3651,7 +3504,7 @@ void AccessService::dealTopicMsg()
 										zhash_delete(g_deviceList, szDevKey);
 										pthread_mutex_unlock(&g_mutex4DevList);
 									}
-								 }
+								}
 								else {
 									snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]Topic Buffer modify message,"
 										" object=%u, operate=%d, parameter miss, deviceId=%s, factoryId=%s, orgId=%s, "
@@ -3672,8 +3525,8 @@ void AccessService::dealTopicMsg()
 						}
 					}
 					else {
-						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]parse Topic buffer modify message"
-							"error, seq=%u, \r\n", __FUNCTION__, __LINE__, pMsg->usMsgSequence);
+						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]parse Topic buffer modify "
+							"message error, seq=%u, \r\n", __FUNCTION__, __LINE__, pMsg->usMsgSequence);
 						writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
 					}
 					break;
@@ -4536,7 +4389,6 @@ void AccessService::dealNetwork()
 
 void AccessService::handleLinkDisconnect(const char * pLink)
 {
-	char szLog[512] = { 0 };
 	if (pLink) {
 		std::string strLink = pLink;
 		char szGuarder[20] = { 0 };
@@ -4568,9 +4420,6 @@ void AccessService::handleLinkDisconnect(const char * pLink)
 			}
 			pthread_mutex_unlock(&g_mutex4GuarderList);
 		}
-		snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]link=%s disconnect, guarder=%s\r\n", 
-			__FUNCTION__, __LINE__, pLink, szGuarder);
-		writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 	}
 }
 
@@ -4581,10 +4430,10 @@ void AccessService::readDataBuffer()
 	//if (pDev) {
 	//	pDev->deviceBasic.nBattery = 100;
 	//	pDev->deviceBasic.nStatus = 0;
-	//	snprintf(pDev->deviceBasic.szDeviceId, sizeof(pDev->deviceBasic.szDeviceId), "devId01");
-	//	snprintf(pDev->deviceBasic.szFactoryId, sizeof(pDev->deviceBasic.szFactoryId), "01");
+	//	sprintf_s(pDev->deviceBasic.szDeviceId, sizeof(pDev->deviceBasic.szDeviceId), "devId01");
+	//	sprintf_s(pDev->deviceBasic.szFactoryId, sizeof(pDev->deviceBasic.szFactoryId), "01");
 	//	pDev->deviceBasic.ulLastActiveTime = (unsigned long)time(NULL);
-	//	snprintf(pDev->szOrganization, sizeof(pDev->szOrganization), "org01");
+	//	sprintf_s(pDev->szOrganization, sizeof(pDev->szOrganization), "org01");
 	//	pDev->deviceBasic.nStatus = DEV_ONLINE;
 	//	pDev->ulBindTime = 0;
 	//	pDev->ulLastFleeAlertTime = 0;
@@ -4600,10 +4449,10 @@ void AccessService::readDataBuffer()
 	//pthread_mutex_lock(&g_mutex4GuarderList);
 	//Guarder * pGuarder = (Guarder *)malloc(sizeof(Guarder));
 	//if (pGuarder) {
-	//	snprintf(pGuarder->szId, sizeof(pGuarder->szId), "test");
-	//	snprintf(pGuarder->szPassword, sizeof(pGuarder->szPassword), "test123");
-	//	snprintf(pGuarder->szOrg, sizeof(pGuarder->szOrg), "org01");
-	//	snprintf(pGuarder->szTagName, sizeof(pGuarder->szTagName), "test");
+	//	sprintf_s(pGuarder->szId, sizeof(pGuarder->szId), "test");
+	//	sprintf_s(pGuarder->szPassword, sizeof(pGuarder->szPassword), "test123");
+	//	sprintf_s(pGuarder->szOrg, sizeof(pGuarder->szOrg), "org01");
+	//	sprintf_s(pGuarder->szTagName, sizeof(pGuarder->szTagName), "test");
 	//	pGuarder->szBindDevice[0] = '\0';
 	//	pGuarder->szCurrentSession[0] = '\0';
 	//	pGuarder->szLink[0] = '\0';
@@ -4791,42 +4640,6 @@ void AccessService::readDataBuffer()
 	} while (0);
 }
 
-void AccessService::verifyLinkList()
-{
-	pthread_mutex_lock(&m_mutex4LinkList);
-	access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_first(m_linkList);
-	while (pLink) {
-		time_t now = time(NULL);
-		if (pLink->nActivated) {
-			if (difftime(now, (time_t)pLink->ulActivateTime) >= 540.0) { //9min
-				pLink->nActivated = 0;
-			}
-		}
-		if (pLink->nActivated == 0) {
-			if (verifyLink(pLink->szEndpoint)) {
-				pLink->nActivated = 1;
-				pLink->ulActivateTime = (unsigned long)now;
-			}
-			else {
-				handleLinkDisconnect(pLink->szEndpoint);
-			}
-		}
-		pLink = (access_service::AppLinkInfo *)zhash_next(m_linkList);
-	}
-	pthread_mutex_unlock(&m_mutex4LinkList);
-}
-
-bool AccessService::verifyLink(const char * pEndpoint_)
-{
-	bool result = false;
-	do {
-		if (TS_SendData(m_uiSrvInst, pEndpoint_, "", 0) == 0) {
-			result = true;
-		}
-	} while (0);
-	return result;
-}
-
 void * dealNetworkThread(void * param)
 {
 	AccessService * pService = (AccessService *)param;
@@ -4899,7 +4712,7 @@ int supervise(zloop_t * loop, int timer_id, void * arg)
 			if (pService->m_nTimerTickCount % 6 == 0) { //1min
 				bool bActived = false;
 				pthread_mutex_lock(&pService->m_mutex4RemoteLink);
-				if (pService->m_remoteMsgSrvLink.nActive == 0) {
+				if (pService->m_remoteMsgSrvLink.nActive) {
 					bActived = true;
 				}
 				pthread_mutex_unlock(&pService->m_mutex4RemoteLink);
@@ -4915,7 +4728,7 @@ int supervise(zloop_t * loop, int timer_id, void * arg)
 					}
 				}
 			}
-			if (pService->m_nTimerTickCount % 18 == 0) { //3min
+			else if (pService->m_nTimerTickCount % 18 == 0) { //3min
 				pthread_mutex_lock(&pService->m_mutex4RemoteLink);
 				if (pService->m_remoteMsgSrvLink.nActive) {
 					time_t now = time(NULL);
@@ -4925,9 +4738,6 @@ int supervise(zloop_t * loop, int timer_id, void * arg)
 					}
 				}
 				pthread_mutex_unlock(&pService->m_mutex4RemoteLink);
-			}
-			if (pService->m_nTimerTickCount % 30 == 0) {
-				pService->verifyLinkList();
 			}
 			pService->m_nTimerTickCount++;
 			if (pService->m_nTimerTickCount == 360) {//reset when 1 hour

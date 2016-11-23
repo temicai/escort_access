@@ -12,6 +12,8 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
+const char * kDefaultDeviceId = "3917677394";
+
 struct MessageHead
 {
 	char mark[2];
@@ -33,6 +35,7 @@ struct RecvData
 bool bLogin = false;
 bool bBind = false;
 bool bTask = false;
+bool bModifyEncrypt = false;
 
 bool bRunning = false;
 std::mutex mutex4DataQue;
@@ -57,7 +60,8 @@ void menu()
 		"'n' or 'N': Notify position\n"
 		"'f' or 'F': Flee\n"
 		"'r' or 'R': Revoke flee\n"
-		"'m' or 'M': Menu\n"
+		"'m' or 'M': Modify\n"
+		"'h' or 'H': help menu\n"
 		"'q' or 'Q': quit\n");
 }
 
@@ -207,8 +211,10 @@ void send_func(SOCKET sock)
 		if (c == 'i' || c == 'I') { //test || test
 			if (!bLogin) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test\",\"passwd\":\"test123\""
-					",\"datetime\":\"%s\"}", szDatetime);
+				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test\",\"passwd\":\"test123\""
+				//	",\"datetime\":\"%s\"}", szDatetime);
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982"
+					"179c0d0944dee43fb23d2\",\"datetime\":\"%s\"}", szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -218,7 +224,7 @@ void send_func(SOCKET sock)
 		else if (c == 'o' || c == 'O') {
 			if (bLogin) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":2,\"session\":\"%s\",\"datetime\":\"%s\"}", 
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":2,\"session\":\"%s\",\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -229,8 +235,8 @@ void send_func(SOCKET sock)
 		else if (c == 'b' || c == 'B') {
 			if (bLogin && !bBind) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":3,\"session\":\"%s\",\"deviceId\":\"1413228752\","
-					"\"datetime\":\"%s\"}", szSession, szDatetime);
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":3,\"session\":\"%s\",\"deviceId\":\"%s\","
+					"\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -240,8 +246,8 @@ void send_func(SOCKET sock)
 		else if (c == 'u' || c == 'U') {
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":4,\"session\":\"%s\",\"deviceId\":\"1413228752\","
-					"\"datetime\":\"%s\"}", szSession, szDatetime);
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":4,\"session\":\"%s\",\"deviceId\":\"%s\","
+					"\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -251,8 +257,8 @@ void send_func(SOCKET sock)
 		else if (c == 's' || c == 'S') {
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"destination1\",\"target\":\"1234567890&ÕÅÈý\",\"datetime\":\"%s\"}", 
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
+					"\"destination\":\"destination1\",\"target\":\"aaaabbbbcc&Áø·Ç\",\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -263,7 +269,7 @@ void send_func(SOCKET sock)
 		else if (c == 'c' || c == 'C') {
 			if (bTask) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":6,\"session\":\"%s\",\"taskId\":\"%s\","
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":6,\"session\":\"%s\",\"taskId\":\"%s\","
 					"\"closeType\":0,\"datetime\":\"%s\"}", szSession, szTask, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -274,7 +280,7 @@ void send_func(SOCKET sock)
 		else if (c == 'f' || c == 'F') {
 			if (bTask) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":8,\"session\":\"%s\",\"taskId\":\"%s\","
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":8,\"session\":\"%s\",\"taskId\":\"%s\","
 					"\"datetime\":\"%s\"}", szSession, szTask, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -285,7 +291,7 @@ void send_func(SOCKET sock)
 		else if (c == 'r' || c == 'R') {
 			if (bTask) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":9,\"session\":\"%s\",\"taskId\":\"%s\","
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":9,\"session\":\"%s\",\"taskId\":\"%s\","
 					"\"datetime\":\"%s\"}", szSession, szTask, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -293,7 +299,7 @@ void send_func(SOCKET sock)
 		else if (c == 'n' || c == 'N') {
 			if (bTask) {
 				char szMsg[256] = { 0 };
-				sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":7,\"session\":\"%s\",\"taskId\":\"%s\","
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":7,\"session\":\"%s\",\"taskId\":\"%s\","
 					"\"datetime\":\"%s\",\"lat\":121.3011192,\"lng\":30.1359912}", szSession, szTask,
 					szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
@@ -303,8 +309,32 @@ void send_func(SOCKET sock)
 				printf("[SEND]notice need task first\n");
 			}
 		}
-		else if (c == 'm' || c == 'M') {
+		else if (c == 'h' || c == 'H') {
 			menu();
+		}
+		else if (c == 'm' || c == 'M') {
+			if (bLogin) {
+				char szMsg[256] = { 0 };
+				if (!bModifyEncrypt) {
+					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":12,\"session\":\"%s\",\"currPasswd\":\"%s\","
+						"\"newPasswd\":\"%s\",\"datetime\":\"%s\"}", szSession, "3cf2bc71982179c0d0944dee43f"
+						"b23d2", "123456", szDatetime);
+					sendMsg(sock, szMsg, strlen(szMsg));
+					bModifyEncrypt = true;
+					printf("[SEND]modify passwd to decrypt\n");
+				}
+				else {
+					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":12,\"session\":\"%s\",\"currPasswd\":\"%s\","
+						"\"newPasswd\":\"%s\",\"datetime\":\"%s\"}", szSession, "123456", "3cf2bc71982179c0d"
+						"0944dee43fb23d2", szDatetime);
+					sendMsg(sock, szMsg, strlen(szMsg));
+					bModifyEncrypt = false;
+					printf("[SEND]modify passwd to encrypt\n");
+				}
+			}
+			else {
+				printf("[SEND]need login first\n");
+			}
 		}
 		else if (c == 'q' || c == 'Q') {
 			bRunning = false;
@@ -599,6 +629,24 @@ void parse(RecvData * pRecvData)
 				}
 				break;
 			}
+			case 112: { //modify passwd reply
+				if (doc.HasMember("session")) {
+					if (doc["session"].IsString()) {
+						printf("[PARSE]modify password session=%s\n", doc["session"].GetString());
+					}
+				}
+				if (doc.HasMember("retcode")) {
+					if (doc["retcode"].IsInt()) {
+						printf("[PARSE]modify password retcode=%d\n", doc["retcode"].GetInt());
+					}
+				}
+				if (doc.HasMember("datetime")) {
+					if (doc["datetime"].IsString()) {
+						printf("[PARSE]modify password datetime=%s\n", doc["datetime"].GetString());
+					}
+				}
+				break;
+			}
 			default: break;
 		}
 	}
@@ -672,7 +720,7 @@ void position_func(SOCKET sock)
 			char szDateTime[20] = { 0 };
 			format_datetime((unsigned long)nCurrTime, szDateTime, sizeof(szDateTime));
 			char szCmd[256] = { 0 };
-			sprintf_s(szCmd, sizeof(szCmd), "{\"cmd\":7,\"session\":\"%s\",\"taskId\":\"%s\",\"lat\":%f,\"lng\":%f"
+			snprintf(szCmd, sizeof(szCmd), "{\"cmd\":7,\"session\":\"%s\",\"taskId\":\"%s\",\"lat\":%f,\"lng\":%f"
 				",\"datetime\":\"%s\"}", szSession, szTask, 30.321070, 120.189588, szDateTime);
 			sendMsg(sock, szCmd, strlen(szCmd));
 			printf("[Position]app notice postion at time:%lu\n", (unsigned long)nCurrTime);
