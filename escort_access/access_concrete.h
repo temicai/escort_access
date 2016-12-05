@@ -55,6 +55,7 @@ namespace access_service
 		E_CMD_MSG_NOTIFY = 10,
 		E_CMD_KEEPALIVE = 11,
 		E_CMD_MODIFY_PASSWD = 12,
+		E_CMD_QUERY_TASK = 13,
 		E_CMD_LOGIN_REPLY = 101,
 		E_CMD_LOGOUT_REPLY = 102,
 		E_CMD_BIND_REPLY = 103,
@@ -65,6 +66,7 @@ namespace access_service
 		E_CMD_FLEE_REVOKE_REPLY = 109,
 		E_CMD_KEEPALIVE_REPLY = 111,
 		E_CMD_MODIFY_PASSWD_REPLY = 112,
+		E_CMD_QUERY_TASK_REPLY = 113,
 	};
 
 	enum eAppTaskType
@@ -186,6 +188,16 @@ namespace access_service
 		char szDestination[32];
 		char szTarget[64];
 		char szDatetime[16];
+		tagAppSubmitTask()
+		{
+			uiReqSeq = 0;
+			szSession[0] = '\0';
+			usTaskType = 0;
+			usTaskLimit = 0;
+			szDestination[0] = '\0';
+			szTarget[0] = '\0';
+			szDatetime[0] = '\0';
+		}
 	} AppSubmitTaskInfo;
 
 	typedef struct tagAppCloseTask
@@ -214,6 +226,14 @@ namespace access_service
 		char szTaskId[12];
 		char szDatetime[16];
 		int nMode; // 0-flee 1-flee revoke
+		tagAppSubmitFlee()
+		{
+			uiReqSeq = 0;
+			szSession[0] = '\0';
+			szTaskId[0] = '\0';
+			szDatetime[0] = '\0';
+			nMode = -1;
+		}
 	} AppSubmitFleeInfo;
 
 	typedef struct tagAppKeepAlive
@@ -245,6 +265,21 @@ namespace access_service
 			uiSeq = 0;
 		}
 	} AppModifyPassword;
+
+	typedef struct tagAppQueryTask
+	{
+		char szSession[20];
+		char szTaskId[12];
+		char szDatetime[16];
+		unsigned int uiQuerySeq;
+		tagAppQueryTask()
+		{
+			szSession[0] = '\0';
+			szTaskId[0] = '\0';
+			szDatetime[0] = '\0';
+			uiQuerySeq = 0;
+		}
+	} AppQueryTask;
 
 	typedef struct tagAppLinkInfo
 	{
@@ -334,7 +369,9 @@ protected:
 	void handleAppPosition(access_service::AppPositionInfo positionInfo, const char *, unsigned long);
 	void handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, const char *, unsigned long);
 	void handleAppKeepAlive(access_service::AppKeepAlive keepAlive, const char *, unsigned long);
-	void handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd, const char *, unsigned long);
+	void handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd, const char *,
+		unsigned long);
+	void handleAppQueryTask(access_service::AppQueryTask queryTask, const char *, unsigned long);
 
 	unsigned int getNextRequestSequence();
 	int generateSession(char * pSession, size_t nSize);

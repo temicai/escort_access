@@ -66,6 +66,33 @@ static char * make_zkpath(int num, ...)
 	return path;
 }
 
+std::string Utf8ToAnsi(LPCSTR utf8)
+{
+	int WLength = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, NULL);
+	LPWSTR pszW = (LPWSTR)_alloca((WLength + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, pszW, WLength);
+	pszW[WLength] = '\0';
+	int ALength = WideCharToMultiByte(CP_ACP, 0, pszW, -1, NULL, 0, NULL, NULL);
+	LPSTR pszA = (LPSTR)_alloca(ALength + 1);
+	WideCharToMultiByte(CP_ACP, 0, pszW, -1, pszA, ALength, NULL, NULL);
+	pszA[ALength] = '\0';
+	std::string retStr = pszA;
+	return retStr;
+}
+
+std::string AnsiToUtf8(LPCSTR Ansi)
+{
+	int WLength = MultiByteToWideChar(CP_ACP, 0, Ansi, -1, NULL, 0);
+	LPWSTR pszW = (LPWSTR)_alloca((WLength + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(CP_ACP, 0, Ansi, -1, pszW, WLength);
+	int ALength = WideCharToMultiByte(CP_UTF8, 0, pszW, -1, NULL, 0, NULL, NULL);
+	LPSTR pszA = (LPSTR)_alloca(ALength + 1);
+	WideCharToMultiByte(CP_UTF8, 0, pszW, -1, pszA, ALength, NULL, NULL);
+	pszA[ALength] = '\0';
+	std::string retStr(pszA);
+	return retStr;
+}
+
 void __stdcall fMsgCb(int nType, void * pMsg, void * pUserData)
 {
 	AccessService * pService = (AccessService *)pUserData;
@@ -812,8 +839,18 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 					char * pContent = (char *)malloc(uiUnitLen + 1);
 					memcpy_s(pContent, uiUnitLen, pBuf + ulBeginIndex, uiUnitLen);
 					pContent[uiUnitLen] = '\0';
+					std::string ansiStr = Utf8ToAnsi(pContent);
+					size_t nAnsiStrLen = ansiStr.size();
+					char * pContent2 = (char *)malloc(nAnsiStrLen + 1);
+					memcpy_s(pContent2, nAnsiStrLen, ansiStr.c_str(), nAnsiStrLen);
+					pContent2[nAnsiStrLen] = '\0';
+					//printf("pContent: %s\n", pContent);
+					printf("pContent2: %s\n", pContent2);
+					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]pContent2=%s\r\n", __FUNCTION__,
+						__LINE__, pContent2);
+					writeLog(szLog, LOGCATEGORY_UNDEFINED, m_nLogType);
 					rapidjson::Document doc;
-					if (!doc.Parse(pContent).HasParseError()) {
+					if (!doc.Parse(pContent2).HasParseError()) {
 						access_service::eAppCommnad nCmd = access_service::E_CMD_UNDEFINE;
 						if (doc.HasMember("cmd")) {
 							if (doc["cmd"].IsInt()) {
@@ -829,25 +866,23 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 									bool bValidDatetime = false;
 									if (doc["account"].IsString()) {
 										size_t nSize = doc["account"].GetStringLength();
-										const char * pAccount = doc["account"].GetString();
-										if (pAccount && nSize) {
-											strncpy_s(loginInfo.szUser, sizeof(loginInfo.szUser), pAccount, nSize);
+										if (nSize) {
+											strncpy_s(loginInfo.szUser, sizeof(loginInfo.szUser), doc["account"].GetString(), nSize);
 											bValidAccount = true;
 										}
 									}
 									if (doc["passwd"].IsString()) {
 										size_t nSize = doc["passwd"].GetStringLength();
-										const char * pPwd = doc["passwd"].GetString();
-										if (pPwd && nSize) {
-											strncpy_s(loginInfo.szPasswd, sizeof(loginInfo.szPasswd), pPwd, nSize);
+										if (nSize) {
+											strncpy_s(loginInfo.szPasswd, sizeof(loginInfo.szPasswd), doc["passwd"].GetString(), nSize);
 											bValidPasswd = true;
 										}
 									}
 									if (doc["datetime"].IsString()) {
 										size_t nSize = doc["datetime"].GetStringLength();
-										const char * pDateTime = doc["datetime"].GetString();
-										if (pDateTime && nSize) {
-											strncpy_s(loginInfo.szDateTime, sizeof(loginInfo.szDateTime), pDateTime, nSize);
+										if (nSize) {
+											strncpy_s(loginInfo.szDateTime, sizeof(loginInfo.szDateTime), doc["datetime"].GetString(),
+												nSize);
 											bValidDatetime = true;
 										}
 									}
@@ -1039,16 +1074,18 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 									}
 									if (doc["destination"].GetString()) {
 										size_t nSize = doc["destination"].GetStringLength();
-										const char * pDestination = doc["destination"].GetString();
-										if (pDestination && nSize) {
-											strncpy_s(taskInfo.szDestination, sizeof(taskInfo.szDestination), pDestination, nSize);
+										if (nSize) {
+											size_t nFieldSize = sizeof(taskInfo.szDestination);
+											strncpy_s(taskInfo.szDestination, nFieldSize, doc["destination"].GetString(), 
+												(nSize < nFieldSize) ? nSize : nFieldSize - 1);
 										}
 									}
 									if (doc["target"].GetString()) {
 										size_t nSize = doc["target"].GetStringLength();
-										const char * pTarget = doc["target"].GetString();
-										if (pTarget && nSize) {
-											strncpy_s(taskInfo.szTarget, sizeof(taskInfo.szTarget), pTarget, nSize);
+										if (nSize) {
+											size_t nFieldSize = sizeof(taskInfo.szTarget);
+											strncpy_s(taskInfo.szTarget, nFieldSize, doc["target"].GetString(),
+												(nSize < nFieldSize) ? nSize : nFieldSize - 1);
 										}
 									}
 									if (doc["datetime"].GetString()) {
@@ -1395,10 +1432,60 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 									}
 								}
 								else {
-									snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]modify passwd from %s, JSON data format"
-										" error\r\n", __FUNCTION__, __LINE__, pMsg->szEndPoint);
+									snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]modify password from %s, JSON data "
+										"format error\r\n", __FUNCTION__, __LINE__, pMsg->szEndPoint);
 									writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
 								}
+								break;
+							}
+							case access_service::E_CMD_QUERY_TASK: {
+								if (doc.HasMember("session") && doc.HasMember("taskId") && doc.HasMember("datetime")) {
+									access_service::AppQueryTask queryTask;
+									bool bValidSession = false;
+									bool bValidTask = false;
+									bool bValidDatetime = false;
+									if (doc["session"].IsString()) {
+										size_t nSize = doc["session"].GetStringLength();
+										if (nSize) {
+											strncpy_s(queryTask.szSession, sizeof(queryTask.szSession), doc["session"].GetString(),
+												nSize);
+											bValidSession = true;
+										}
+									}
+									if (doc["taskId"].IsString()) {
+										size_t nSize = doc["taskId"].GetStringLength();
+										if (nSize) {
+											strncpy_s(queryTask.szTaskId, sizeof(queryTask.szTaskId), doc["taskId"].GetString(),
+												nSize);
+											bValidTask = true;
+										}
+									}
+									if (doc["datetime"].IsString()) {
+										size_t nSize = doc["datetime"].GetStringLength();
+										if (nSize) {
+											strncpy_s(queryTask.szDatetime, sizeof(queryTask.szDatetime), doc["datetime"].GetString(),
+												nSize);
+											bValidDatetime = true;
+										}
+									}
+									if (bValidSession && bValidTask && bValidDatetime) {
+										queryTask.uiQuerySeq = getNextRequestSequence();
+										handleAppQueryTask(queryTask, pMsg->szEndPoint, pMsg->ulMsgTime);
+									}
+									else {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]query task from %s, one or more param"
+											"eter miss, session=%s, task=%s, datetime=%s\r\n", __FUNCTION__, __LINE__, pMsg->szEndPoint,
+											bValidSession ? queryTask.szSession : "null", bValidTask ? queryTask.szTaskId : "null",
+											bValidDatetime ? queryTask.szDatetime : "null");
+										writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
+									}
+								}
+								else {
+									snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]query task from %s, JSON data format "
+										"error\r\n", __FUNCTION__, __LINE__, pMsg->szEndPoint);
+									writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
+								}
+								break;
 							}
 							default: {
 								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]can't recognise command: %d\r\n", 
@@ -1415,6 +1502,8 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 					}
 					free(pContent);
 					pContent = NULL;
+					free(pContent2);
+					pContent2 = NULL;
 				}
 			} while (1);
 			free(pBuf);
@@ -1734,9 +1823,9 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 		pCurrTask = NULL;
 	}
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s, datetime=%s, result=%d, "
-		"session=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, loginInfo.szDateTime, nErr, szSession);
+		"session=%s, from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, loginInfo.szDateTime, nErr, 
+		szSession, pEndPoint);
 	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
-	
 }
 
 void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char * pEndPoint, 
@@ -1775,10 +1864,6 @@ void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, co
 					if (strlen(pGuarder->szBindDevice) && pGuarder->uiState == STATE_GUARDER_BIND) {
 						pGuarder->uiState = STATE_GUARDER_FREE;				
 					}
-					if (strlen(pGuarder->szBindDevice)) {
-						strncpy_s(szDevKey, sizeof(szDevKey), pGuarder->szBindDevice, 
-							strlen(pGuarder->szBindDevice));
-					}
 					pGuarder->szBindDevice[0] = '\0';
 					pGuarder->szCurrentSession[0] = '\0';
 				}
@@ -1790,6 +1875,15 @@ void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, co
 		access_service::E_CMD_LOGOUT_REPLY, nErr, logoutInfo.szSession);
 	sendDatatoEndpoint(szReply, strlen(szReply), pEndPoint);
 	if (nErr == E_OK) {
+		//delete session link
+		pthread_mutex_lock(&m_mutex4LinkList);
+		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, 
+			logoutInfo.szSession);
+		if (pLink) {
+			strncpy_s(szDevKey, sizeof(szDevKey), pLink->szDeviceId, strlen(pLink->szDeviceId));
+		}
+		zhash_delete(m_linkList, logoutInfo.szSession);
+		pthread_mutex_unlock(&m_mutex4LinkList);
 		if (strlen(szDevKey)) {
 			pthread_mutex_lock(&g_mutex4DevList);
 			if (g_deviceList) {
@@ -1801,10 +1895,6 @@ void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, co
 			}
 			pthread_mutex_unlock(&g_mutex4DevList);
 		}
-		//delete session link
-		pthread_mutex_lock(&m_mutex4LinkList);
-		zhash_delete(m_linkList, logoutInfo.szSession);
-		pthread_mutex_unlock(&m_mutex4LinkList);
 	}
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]logout session=%s, datetime=%s, user=%s, "
 		"result=%d\r\n", __FUNCTION__, __LINE__, logoutInfo.szSession, logoutInfo.szDateTime, szGuarder,
@@ -1849,6 +1939,10 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 					if (pGuarder->uiState == STATE_GUARDER_BIND && strlen(pGuarder->szBindDevice) > 0) {
 						if (strcmp(pGuarder->szBindDevice, bindInfo.szDeviceId) != 0) {
 							nErr = E_GUARDERBINDOTHERDEVICE;
+						}
+						else {
+							nErr = E_ALREADYBINDDEVICE;
+							bValidGuarder = true;
 						}
 					}
 					else if (pGuarder->uiState == STATE_GUARDER_DUTY && strlen(pGuarder->szTaskId) > 0) {
@@ -2058,7 +2152,7 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 			pthread_mutex_lock(&g_mutex4GuarderList);
 			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 			if (pGuarder) {
-				strncpy_s(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), bindInfo.szDeviceId,
+				strncpy_s(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), bindInfo.szDeviceId, 
 					strlen(bindInfo.szDeviceId));
 				pGuarder->uiState = STATE_GUARDER_BIND;
 			}
@@ -2120,10 +2214,10 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 			pthread_mutex_unlock(&m_mutex4SubscribeList);
 		}
 	}	
-	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]%lu, %s device=%s, session=%s, datetime=%s, "
-		"result=%d\r\n", __FUNCTION__, __LINE__, bindInfo.uiReqSeq, 
-		(bindInfo.nMode == 0) ? "bind" : "unbind", bindInfo.szDeviceId, bindInfo.szSesssion, 
-		bindInfo.szDateTime, nErr);
+	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]seq=%lu, seq=%s, device=%s, factoryId=%s, session=%s,"
+		" datetime=%s, org=%s, result=%d\r\n", __FUNCTION__, __LINE__, bindInfo.uiReqSeq, 
+		(bindInfo.nMode == 0) ? "bind" : "unbind", bindInfo.szDeviceId,	szFactory, bindInfo.szSesssion, 
+		bindInfo.szDateTime, szOrg,	nErr);
 	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 }
 
@@ -2251,6 +2345,7 @@ void AccessService::handleAppSubmitTask(access_service::AppSubmitTaskInfo taskIn
 			strncpy_s(pGuarder->szTaskId, sizeof(pGuarder->szTaskId), szTaskId, strlen(szTaskId));
 			strncpy_s(pGuarder->szTaskStartTime, sizeof(pGuarder->szTaskStartTime), taskInfo.szDatetime,
 				strlen(taskInfo.szDatetime));
+			pGuarder->uiState = STATE_GUARDER_DUTY;
 			if (strcmp(pGuarder->szLink, pEndpoint) != 0) {
 				strncpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndpoint, strlen(pEndpoint));
 				bUpdateLink = true;
@@ -2632,8 +2727,8 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive keepAlive_, 
 	}
 	pthread_mutex_unlock(&m_mutex4LinkList);
 	char szLog[256] = { 0 };
-	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report keep alive, from=%s, session=%s, seq=%u, "
-		"datetime=%s\r\n", __FUNCTION__, __LINE__, pEndpoint_, keepAlive_.szSession, keepAlive_.uiSeq,
+	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report keep alive, from=%s, session=%s, seq=%u,"
+		" datetime=%s\r\n", __FUNCTION__, __LINE__, pEndpoint_, keepAlive_.szSession, keepAlive_.uiSeq,
 		keepAlive_.szDatetime);
 	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 }
@@ -2711,6 +2806,101 @@ void AccessService::handleAppModifyAccountPassword(access_service::AppModifyPass
 		" seq=%u, datetime=%s, result=%d\r\n", __FUNCTION__, __LINE__, pEndpoint_,
 		modifyPasswd_.szSession, modifyPasswd_.uiSeq, modifyPasswd_.szDatetime, nErr);
 	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
+}
+
+void AccessService::handleAppQueryTask(access_service::AppQueryTask queryTask_, 
+	const char * pEndpoint_, unsigned long ulTime_)
+{
+	char szLog[512] = { 0 };
+	bool bValidTask = false;
+	bool bValidLink = false;
+	int nErr = E_OK;
+	EscortTask * pCurrTask = NULL;
+	char szDeviceId[20] = { 0 };
+	unsigned short usDeviceStatus = 0;
+	unsigned short usDeviceBattery = 0;
+	pthread_mutex_lock(&m_mutex4LinkList);
+	if (zhash_size(m_linkList)) {
+		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
+			queryTask_.szSession);
+		if (pLink) {
+			if (!pLink->nActivated) {
+				pLink->nActivated = 1;
+			}
+			pLink->ulActivateTime = ulTime_;
+			if (strlen(pLink->szDeviceId) && strlen(pLink->szTaskId)) {
+				if (strcmp(pLink->szTaskId, queryTask_.szTaskId) == 0) {
+					bValidLink = true;
+				}
+				else {
+					nErr = E_INVALIDTASK;
+				}
+			}
+			else {
+				nErr = E_UNBINDDEVICE;
+			}
+		}
+		else {
+			nErr = E_INVALIDSESSION;
+		}
+	}
+	pthread_mutex_unlock(&m_mutex4LinkList);
+	if (bValidLink) {
+		pthread_mutex_lock(&g_mutex4TaskList);
+		if (zhash_size(g_taskList)) {
+			EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, queryTask_.szTaskId);
+			if (pTask) {
+				bValidTask = true;
+				size_t nTaskSize = sizeof(EscortTask);
+				pCurrTask = (EscortTask *)zmalloc(nTaskSize);
+				memcpy_s(pCurrTask, nTaskSize, pTask, nTaskSize);
+				strncpy_s(szDeviceId, sizeof(szDeviceId), pTask->szDeviceId, strlen(pTask->szDeviceId));
+			}
+		}
+		pthread_mutex_unlock(&g_mutex4TaskList);
+	}
+	if (bValidTask) {
+		pthread_mutex_lock(&g_mutex4DevList);
+		if (zhash_size(g_deviceList)) {
+			WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
+			if (pDevice) {
+				usDeviceBattery = pDevice->deviceBasic.nBattery;
+				usDeviceStatus = pDevice->deviceBasic.nStatus;
+			}
+		}
+		pthread_mutex_unlock(&g_mutex4DevList);
+	}
+	char szReply[512] = { 0 };
+	if (nErr == E_OK) {
+		if (bValidTask && pCurrTask) {
+			snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":%d,\"session\":\"%s\",\"datetime\":"
+				"\"%s\",\"taskInfo\":[{\"taskId\":\"%s\",\"deviceId\":\"%s\",\"type\":%d,\"limit\":%d,"
+				"\"destination\":\"%s\",\"target\":\"%s\",\"startTime\":\"%s\",\"battery\":%u,\"deviceState\""
+				":%u}]}", access_service::E_CMD_QUERY_TASK_REPLY, nErr, queryTask_.szSession, 
+				queryTask_.szDatetime, pCurrTask->szTaskId, pCurrTask->szDeviceId, pCurrTask->nTaskType, 
+				pCurrTask->nTaskLimitDistance, pCurrTask->szDestination, pCurrTask->szTarget, 
+				pCurrTask->szTaskStartTime, usDeviceBattery, usDeviceStatus);
+		}
+		else {
+			snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":%d,\"session\":\"%s\",\"datetime\":"
+				"\"%s\",\"taskInfo\":\"[]\"}", access_service::E_CMD_QUERY_TASK_REPLY, nErr,
+				queryTask_.szSession, queryTask_.szDatetime);
+		}
+	}
+	else {
+		snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":%d,\"session\":\"%s\",\"datetime\":"
+			"\"%s\",\"taskInfo\":\"[]\"}", access_service::E_CMD_QUERY_TASK_REPLY, nErr, 
+			queryTask_.szSession, queryTask_.szDatetime);
+	}
+	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint_);
+	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]query task from %s, session=%s, taskId=%s, "
+		"datetime=%s, result=%d\r\n", __FUNCTION__, __LINE__, pEndpoint_, queryTask_.szSession, 
+		queryTask_.szTaskId, queryTask_.szDatetime, nErr);
+	writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
+	if (pCurrTask) {
+		free(pCurrTask);
+		pCurrTask = NULL;
+	}
 }
 
 unsigned int AccessService::getNextRequestSequence()
@@ -4014,6 +4204,7 @@ int AccessService::handleTopicOfflineMsg(TopicOfflineMessage * pMsg, const char 
 int AccessService::handleTopicAliveMsg(TopicAliveMessage * pMsg, const char * pMsgSubstitle)
 {
 	int result = E_DEFAULTERROR;
+	char szLog[256] = { 0 };
 	if (pMsg) {
 		bool bValidMsg = false;
 		unsigned short usBattery = 0;
@@ -4054,9 +4245,13 @@ int AccessService::handleTopicAliveMsg(TopicAliveMessage * pMsg, const char * pM
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\""
 					":\"%s\",\"battery\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
-					access_service::E_ALARM_DEVICE_LOWPOWER, pMsg->szDeviceId, usBattery, szDatetime);
+					access_service::E_NOTIFY_DEVICE_BATTERY, pMsg->szDeviceId, usBattery, szDatetime);
 				if (strlen(szMsg)) {
 					sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, device=%s,"
+						" battery=%d, datetime=%s, notify device battery\r\n", __FUNCTION__, __LINE__,
+						szEndpoint, szSession, pMsg->szDeviceId, usBattery, szDatetime);
+					writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 				}
 			}
 		}
@@ -4067,6 +4262,7 @@ int AccessService::handleTopicAliveMsg(TopicAliveMessage * pMsg, const char * pM
 int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const char * pMsgSubstitle)
 {
 	int result = E_DEFAULTERROR;
+	char szLog[512] = { 0 };
 	if (pMsg && pMsg->dLat > 0 && pMsg->dLng > 0 && pMsg->usFlag == 1) {
 		if (strlen(pMsg->szDeviceId)) {
 			bool bValidMsg = false;
@@ -4119,6 +4315,11 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 						pMsg->dLat, pMsg->dLng, szDatetime);
 					if (strlen(szMsg)) {
 						sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, deviceId"
+							"=%s, battery=%u, lat=%f, lng=%f, datetime=%s, notify device position\r\n", __FUNCTION__,
+							__LINE__, szEndpoint, szSession, pMsg->szDeviceId, usBattery, pMsg->dLat, pMsg->dLng,
+							szDatetime);
+						writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 					}
 				}
 			}
@@ -4130,6 +4331,7 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const char * pMsgSubstitle)
 {
 	int result = E_DEFAULTERROR;
+	char szLog[512] = { 0 };
 	if (pMsg && pMsg->usFlag == 1 && pMsg->dLat > 0 && pMsg->dLng) {
 		if (strlen(pMsg->szDeviceId) > 0) {
 			unsigned short usBattery = 0;
@@ -4183,6 +4385,10 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 						szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, usBattery,
 						pMsg->dLat, pMsg->dLng, szDatetime);
 					sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, device=%s"
+						", battery=%u, lat=%f, lng=%f, datetime=%s, notify device position\r\n", __FUNCTION__,
+						__LINE__, szEndpoint, szSession, pMsg->szDeviceId, usBattery, pMsg->dLat, pMsg->dLng,
+						szDatetime);
 				}
 			}
 		}
@@ -4193,6 +4399,7 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg, const char * pMsgSubstitle)
 {
 	int result = E_DEFAULTERROR;
+	char szLog[512] = { 0 };
 	if (pMsg) {
 		if (strlen(pMsg->szDeviceId)) {
 			unsigned short usBattery = 0;
@@ -4250,6 +4457,10 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 						pMsg->usMode, szDatetime);
 					if (strlen(szMsg)) {
 						sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, device=%s"
+							", battery=%d, mode=%u, datetime=%s, alarm device lowpower\r\n", __FUNCTION__, __LINE__,
+							szEndpoint, szSession, pMsg->szDeviceId, pMsg->usBattery, pMsg->usMode, szDatetime);
+						writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 					}
 				}
 			}
@@ -4261,6 +4472,7 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 int AccessService::handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const char * pMsgSubstitle)
 {
 	int result = E_DEFAULTERROR;
+	char szLog[512] = { 0 };
 	if (pMsg) {
 		if (strlen(pMsg->szDeviceId)) {
 			unsigned short usBattery = 0;
@@ -4315,9 +4527,11 @@ int AccessService::handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
 						",\"battery\":%u,\"mode\":%u,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
 						access_service::E_ALARM_DEVICE_LOOSE, pMsg->szDeviceId, pMsg->usBattery, pMsg->usMode, szDatetime);
-					if (strlen(szMsg)) {
-						sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-					}
+					sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, deviceId=%s"
+						", battery=%u, mode=%u, datetime=%s, alarm device loose\r\n", __FUNCTION__, __LINE__, szEndpoint,
+						szSession, pMsg->szDeviceId, pMsg->usBattery, pMsg->usMode, szDatetime);
+					writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 				}
 			}
 		}
@@ -4422,13 +4636,23 @@ int AccessService::sendDatatoEndpoint(const char * pData, size_t nDataLen, const
 		size_t nHeadSize = sizeof(access_service::AppMessageHead);
 		access_service::AppMessageHead head;
 		MAKE_APPMSGHEAD(head);
-		head.uiDataLen = nDataLen;
-		unsigned long ulBufLen = nHeadSize + nDataLen;
+		std::string strUtf8Msg = AnsiToUtf8(pData);
+		size_t nUtf8MsgLen = strUtf8Msg.size();
+		//old version
+		//head.uiDataLen = nDataLen;
+		//unsigned long ulBufLen = nHeadSize + nDataLen;
+		//unsigned char * pMsgBuf = (unsigned char *)zmalloc(ulBufLen + 1);
+		//memcpy_s(pMsgBuf, ulBufLen, &head, nHeadSize);
+		//unsigned long ulOffset = nHeadSize;
+		//memcpy_s(pMsgBuf + ulOffset, nDataLen + 1, pData, nDataLen);
+		//encryptMessage(pMsgBuf, ulOffset, ulOffset + nDataLen);
+		head.uiDataLen = nUtf8MsgLen;
+		unsigned long ulBufLen = nHeadSize + nUtf8MsgLen;
 		unsigned char * pMsgBuf = (unsigned char *)zmalloc(ulBufLen + 1);
 		memcpy_s(pMsgBuf, ulBufLen, &head, nHeadSize);
+		memcpy_s(pMsgBuf + nHeadSize, nUtf8MsgLen + 1, strUtf8Msg.c_str(), nUtf8MsgLen);
 		unsigned long ulOffset = nHeadSize;
-		memcpy_s(pMsgBuf + ulOffset, nDataLen + 1, pData, nDataLen);
-		encryptMessage(pMsgBuf, ulOffset, ulOffset + nDataLen);
+		encryptMessage(pMsgBuf, ulOffset, ulOffset + nUtf8MsgLen);
 		result = TS_SendData(m_uiSrvInst, pEndpoint, (const char *)pMsgBuf, ulBufLen);
 		free(pMsgBuf);
 		pMsgBuf = NULL;

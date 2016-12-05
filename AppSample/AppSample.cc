@@ -8,11 +8,13 @@
 #include <queue>
 #include <condition_variable>
 #include <time.h>
+#include <string>
 #include "rapidjson\document.h"
+#include <Windows.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
-const char * kDefaultDeviceId = "3917677394";
+const char * kDefaultDeviceId = "3917677397";
 
 struct MessageHead
 {
@@ -48,6 +50,33 @@ char szTask[12] = { 0 };
 
 #define MAKEHEAD(x) {x.mark[0] = 'E';x.mark[1]='C';x.version[0]='1';x.version[1]='0';}
 
+std::string Utf8ToAnsi(LPCSTR utf8)
+{
+	int WLength = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, NULL);
+	LPWSTR pszW = (LPWSTR)_alloca((WLength + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, pszW, WLength);
+	pszW[WLength] = '\0';
+	int ALength = WideCharToMultiByte(CP_ACP, 0, pszW, -1, NULL, 0, NULL, NULL);
+	LPSTR pszA = (LPSTR)_alloca(ALength + 1);
+	WideCharToMultiByte(CP_ACP, 0, pszW, -1, pszA, ALength, NULL, NULL);
+	pszA[ALength] = '\0';
+	std::string retStr = pszA;
+	return retStr;
+}
+
+std::string AnsiToUtf8(LPCSTR Ansi)
+{
+	int WLength = MultiByteToWideChar(CP_ACP, 0, Ansi, -1, NULL, 0);
+	LPWSTR pszW = (LPWSTR)_alloca((WLength + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(CP_ACP, 0, Ansi, -1, pszW, WLength);
+	int ALength = WideCharToMultiByte(CP_UTF8, 0, pszW, -1, NULL, 0, NULL, NULL);
+	LPSTR pszA = (LPSTR)_alloca(ALength + 1);
+	WideCharToMultiByte(CP_UTF8, 0, pszW, -1, pszA, ALength, NULL, NULL);
+	pszA[ALength] = '\0';
+	std::string retStr(pszA);
+	return retStr;
+}
+
 void menu()
 {
 	printf("----------menu----------\n"
@@ -61,6 +90,7 @@ void menu()
 		"'f' or 'F': Flee\n"
 		"'r' or 'R': Revoke flee\n"
 		"'m' or 'M': Modify\n"
+		"'t' or 'T': Query task\n"
 		"'h' or 'H': help menu\n"
 		"'q' or 'Q': quit\n");
 }
@@ -169,14 +199,23 @@ void recv_func(SOCKET sock)
 void sendMsg(SOCKET sock, const char * pMsg, size_t nMsgSize)
 {
 	if (pMsg && nMsgSize && sock > 0) {
+		std::string strUtf8Msg = AnsiToUtf8(pMsg);
 		MessageHead msgHead;
 		MAKEHEAD(msgHead);
-		msgHead.uiLen = nMsgSize;
+		//msgHead.uiLen = nMsgSize;
+		//size_t nHeadSize = sizeof(MessageHead);
+		//unsigned int nBufLen = nMsgSize + nHeadSize;
+		//unsigned char * pBuf = (unsigned char *)malloc(nBufLen + 1);
+		//memcpy_s(pBuf, nHeadSize, &msgHead, nHeadSize);
+		//memcpy_s(pBuf + nHeadSize, nMsgSize, pMsg, nMsgSize);
+		size_t nUtf8MsgSize = strUtf8Msg.size();
+		msgHead.uiLen = nUtf8MsgSize;
 		size_t nHeadSize = sizeof(MessageHead);
-		unsigned int nBufLen = nMsgSize + nHeadSize;
+		unsigned int nBufLen = nUtf8MsgSize + nHeadSize;
 		unsigned char * pBuf = (unsigned char *)malloc(nBufLen + 1);
 		memcpy_s(pBuf, nHeadSize, &msgHead, nHeadSize);
-		memcpy_s(pBuf + nHeadSize, nMsgSize, pMsg, nMsgSize);
+		memcpy_s(pBuf + nHeadSize, nUtf8MsgSize, strUtf8Msg.c_str(), nUtf8MsgSize);
+		pBuf[nBufLen] = '\0';
 		for (unsigned int i = nHeadSize; i < nBufLen; i++) {
 			pBuf[i] += 1;
 			pBuf[i] ^= '8';
@@ -211,10 +250,10 @@ void send_func(SOCKET sock)
 		if (c == 'i' || c == 'I') { //test || test
 			if (!bLogin) {
 				char szMsg[256] = { 0 };
-				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test\",\"passwd\":\"test123\""
-				//	",\"datetime\":\"%s\"}", szDatetime);
-				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982"
-					"179c0d0944dee43fb23d2\",\"datetime\":\"%s\"}", szDatetime);
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test\",\"passwd\":\"test123\""
+					",\"datetime\":\"%s\"}", szDatetime);
+				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982"
+				//	"179c0d0944dee43fb23d2\",\"datetime\":\"%s\"}", szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -233,7 +272,8 @@ void send_func(SOCKET sock)
 			}
 		}
 		else if (c == 'b' || c == 'B') {
-			if (bLogin && !bBind) {
+			//if (bLogin && !bBind) {
+			if (bLogin) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":3,\"session\":\"%s\",\"deviceId\":\"%s\","
 					"\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
@@ -258,7 +298,7 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"destination1\",\"target\":\"aaaabbbbcc&柳非\",\"datetime\":\"%s\"}", 
+					"\"destination\":\"目的地\",\"target\":\"aaaabbbbcc&柳非\",\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -340,6 +380,14 @@ void send_func(SOCKET sock)
 			bRunning = false;
 			break;
 		}
+		else if (c == 't' || c == 'T') {
+			if (bTask) {
+				char szMsg[256] = { 0 };
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":13,\"session\":\"%s\",\"taskId\":\"%s\",\"date"
+					"time\":\"%s\"}", szSession, szTask, szDatetime);
+				sendMsg(sock, szMsg, strlen(szMsg));
+			}
+		}
 		Sleep(200);
 	}
 }
@@ -347,7 +395,9 @@ void send_func(SOCKET sock)
 void parse(RecvData * pRecvData)
 {
 	rapidjson::Document doc;
-	if (!doc.Parse((const char *)pRecvData->pData).HasParseError()) {
+	std::string strData = Utf8ToAnsi((const char *)pRecvData->pData);
+	//if (!doc.Parse((const char *)pRecvData->pData).HasParseError()) {
+	if (!doc.Parse((const char *)strData.c_str()).HasParseError()) {
 		int nCmd = 0;
 		int nRet = -1;
 		if (doc.HasMember("cmd")) {
@@ -473,6 +523,9 @@ void parse(RecvData * pRecvData)
 							printf("[PARSE]bind battery:%d\n", doc["battery"].GetInt());
 						}
 					}
+				}
+				else if (nRet == 11){
+					bBind = true;
 				}
 				break;
 			}
@@ -647,6 +700,74 @@ void parse(RecvData * pRecvData)
 				}
 				break;
 			}
+			case 113: { //query task info
+				if (doc.HasMember("session")) {
+					if (doc["session"].IsString()) {
+						printf("[PARSE]query task session=%s\n", doc["session"].GetString());
+					}
+				}
+				if (doc.HasMember("retcode")) {
+					if (doc["retcode"].IsInt()) {
+						printf("[PARSE]query task retcode=%d\n", doc["retcode"].GetInt());
+					}
+				}
+				if (doc.HasMember("datetime")) {
+					if (doc["datetime"].IsString()) {
+						printf("[PARSE]query task datetime=%s\n", doc["datetime"].GetString());
+					}
+				}
+				if (doc.HasMember("taskInfo")) {
+					if (doc["taskInfo"].IsArray()) {
+						if (!doc["taskInfo"].GetArray().Empty()) {
+							if (doc["taskInfo"][0].HasMember("taskId")) {
+								if (doc["taskInfo"][0]["taskId"].IsString()) {
+									printf("[PARSE]query task taskId=%s\n", doc["taskInfo"][0]["taskId"].GetString());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("deviceId")) {
+								if (doc["taskInfo"][0]["deviceId"].IsString()) {
+									printf("[PARSE]query task device=%s\n", doc["taskInfo"][0]["deviceId"].GetString());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("type")) {
+								if (doc["taskInfo"][0]["type"].IsInt()) {
+									printf("[PARSE]query task type:%d\n", doc["taskInfo"][0]["type"].GetInt());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("limit")) {
+								if (doc["taskInfo"][0]["limit"].IsInt()) {
+									printf("[PARSE]query task limit:%d\n", doc["taskInfo"][0]["limit"].GetInt());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("target")) {
+								if (doc["taskInfo"][0]["target"].IsString()) {
+									printf("[PARSE]query task target:%s\n", doc["taskInfo"][0]["target"].GetString());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("destination")) {
+								if (doc["taskInfo"][0]["destination"].IsString()) {
+									printf("[PARSE]query task destination:%s\n", doc["taskInfo"][0]["destination"].GetString());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("startTime")) {
+								if (doc["taskInfo"][0]["startTime"].IsString()) {
+									printf("[PARSE]query task startTime:%s\n", doc["taskInfo"][0]["startTime"].GetString());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("deviceState")) {
+								if (doc["taskInfo"][0]["deviceState"].IsInt()) {
+									printf("[PARSE]query task state:%d\n", doc["taskInfo"][0]["deviceState"].GetInt());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("battery")) {
+								if (doc["taskInfo"][0]["battery"].IsInt()) {
+									printf("[PARSE]query task battery:%d\n", doc["taskInfo"][0]["battery"].GetInt());
+								}
+							}
+						}
+					}
+				}
+			}
 			default: break;
 		}
 	}
@@ -672,7 +793,7 @@ void parse_func()
 				pRecvData->pData[i] ^= '8';
 				pRecvData->pData[i] -= 1;
 			}
-			printf("[PARSE]%s\n", (char *)pRecvData->pData);
+			//printf("[PARSE]%s\n", (char *)pRecvData->pData);
 			parse(pRecvData);
 			free(pRecvData->pData);
 			free(pRecvData);
@@ -733,14 +854,15 @@ int main()
 	srand((unsigned int)time(NULL));
 	WSADATA wsaData;
 	WSAStartup(MAKEWORD(2,2), &wsaData);
-	printf("start\n");
+	printf("start, device=%s\n", kDefaultDeviceId);
 	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
 	do {
 		if (sock != INVALID_SOCKET) {
 			struct sockaddr_in addr;
 			addr.sin_family = AF_INET;
 			addr.sin_port = htons(22000);
-			inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+			//inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+			inet_pton(AF_INET, "112.74.196.90", &addr.sin_addr);
 			if (connect(sock, (const sockaddr *)&addr, sizeof(addr)) < 0) {
 				printf("disconnect\n");
 				closesocket(sock);
