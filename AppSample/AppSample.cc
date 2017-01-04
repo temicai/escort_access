@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-const char * kDefaultDeviceId = "3917677397";
+const char * kDefaultDeviceId = "3917677397"; //= "3917833482";  
 
 struct MessageHead
 {
@@ -252,7 +252,7 @@ void send_func(SOCKET sock)
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test\",\"passwd\":\"test123\""
 					",\"datetime\":\"%s\"}", szDatetime);
-				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982"
+				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test3\",\"passwd\":\"3cf2bc71982"
 				//	"179c0d0944dee43fb23d2\",\"datetime\":\"%s\"}", szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -486,6 +486,9 @@ void parse(RecvData * pRecvData)
 						}
 					}
 				}
+				else {
+					printf("[PARSE]login failed, retcode=%d\n", nRet);
+				}
 				break;
 			}
 			case 102: {	//logout
@@ -502,6 +505,9 @@ void parse(RecvData * pRecvData)
 					}
 					szSession[0] = '\0';
 					bLogin = false;
+				}
+				else {
+					printf("[PARSE]logout failed, retcode=%d\n", nRet);
 				}
 				break;
 			}
@@ -524,8 +530,8 @@ void parse(RecvData * pRecvData)
 						}
 					}
 				}
-				else if (nRet == 11){
-					bBind = true;
+				else {
+					printf("[PARSE]bind failed, retcode=%d\n", nRet);
 				}
 				break;
 			}
@@ -542,6 +548,9 @@ void parse(RecvData * pRecvData)
 							printf("[PARSE]unbind session:%s\n", doc["session"].GetString());
 						}
 					}
+				}
+				else {
+					printf("[PARSE]unbind failed, retcode=%d\n", nRet);
 				}
 				break;
 			}
@@ -570,6 +579,9 @@ void parse(RecvData * pRecvData)
 					bTask = true;
 					cond4AppPos.notify_one();
 				}
+				else {
+					printf("[PARSE]task submit failed, retcode=%d\n", nRet);
+				}
 				break;
 			}
 			case 106: { //close task
@@ -593,6 +605,9 @@ void parse(RecvData * pRecvData)
 					bTask = false;
 					szTask[0] = '\0';
 				}
+				else {
+					printf("[PARSE]task close failed, retcode=%d\n", nRet);
+				}
 				break;
 			}
 			case 108: { //flee
@@ -604,7 +619,7 @@ void parse(RecvData * pRecvData)
 				if (nRet == 0) {
 					if (doc.HasMember("session")) {
 						if (doc["session"].IsString()) {
-							printf("[PARSE]task session:%s\n", doc["session"].GetString());
+							printf("[PARSE]flee task session:%s\n", doc["session"].GetString());
 						}
 					}
 					if (doc.HasMember("taskId")) {
@@ -612,10 +627,13 @@ void parse(RecvData * pRecvData)
 							size_t nSize = doc["taskId"].GetStringLength();
 							if (nSize) {
 								strncpy_s(szTask, sizeof(szTask), doc["taskId"].GetString(), nSize);
-								printf("[PARSE]task: %s\n", szTask);
+								printf("[PARSE]flee task: %s\n", szTask);
 							}
 						}
 					}
+				}
+				else {
+					printf("[PARSE]flee failed, retcode=%d\n", nRet);
 				}
 				break;
 			}
@@ -628,14 +646,17 @@ void parse(RecvData * pRecvData)
 				if (nRet == 0) {
 					if (doc.HasMember("session")) {
 						if (doc["session"].IsString()) {
-							printf("[PARSE]close task session:%s\n", doc["session"].GetString());
+							printf("[PARSE]revoke flee task session:%s\n", doc["session"].GetString());
 						}
 					}
 					if (doc.HasMember("taskId")) {
 						if (doc["taskId"].IsString()) {
-							printf("[PARSE]close task:%s\n", doc["taskId"].GetString());
+							printf("[PARSE]revoke flee task:%s\n", doc["taskId"].GetString());
 						}
 					}
+				}
+				else {
+					printf("[PARSE]revoke flee failed, retcode=%d\n", nRet);
 				}
 				break;
 			}
@@ -861,8 +882,8 @@ int main()
 			struct sockaddr_in addr;
 			addr.sin_family = AF_INET;
 			addr.sin_port = htons(22000);
-			//inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-			inet_pton(AF_INET, "112.74.196.90", &addr.sin_addr);
+			inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+			//inet_pton(AF_INET, "112.74.196.90", &addr.sin_addr);
 			if (connect(sock, (const sockaddr *)&addr, sizeof(addr)) < 0) {
 				printf("disconnect\n");
 				closesocket(sock);

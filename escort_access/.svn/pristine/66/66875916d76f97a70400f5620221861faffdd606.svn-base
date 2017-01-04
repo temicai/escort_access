@@ -2101,20 +2101,13 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 				pthread_mutex_lock(&g_mutex4GuarderList);
 				Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 				if (pGuarder) {
-					if (pGuarder->uiState == STATE_GUARDER_BIND) {
-						if (strlen(pGuarder->szBindDevice) > 0) {
-							if (strcmp(pGuarder->szBindDevice, bindInfo.szDeviceId) != 0) {
-								nErr = E_GUARDERBINDOTHERDEVICE;
-							}
-							else {
-								bBindAlready = true;
-								bValidGuarder = true;
-							}
+					if (pGuarder->uiState == STATE_GUARDER_BIND && strlen(pGuarder->szBindDevice) > 0) {
+						if (strcmp(pGuarder->szBindDevice, bindInfo.szDeviceId) != 0) {
+							nErr = E_GUARDERBINDOTHERDEVICE;
 						}
 						else {
+							bBindAlready = true;
 							bValidGuarder = true;
-							strncpy_s(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), bindInfo.szDeviceId, 
-								strlen(bindInfo.szDeviceId));
 						}
 					}
 					else if (pGuarder->uiState == STATE_GUARDER_DUTY && strlen(pGuarder->szTaskId) > 0) {
@@ -2129,8 +2122,8 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 					}
 					else {
 						nErr = E_INVALIDACCOUNT;
-						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]invalid guarder=%s state=%u\r\n", __FUNCTION__, 
-							__LINE__, szGuarder, pGuarder->uiState);
+						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]invalid guarder=%s state\r\n", __FUNCTION__, 
+							__LINE__, szGuarder);
 						writeLog(szLog, LOGCATEGORY_EXCEPTION, m_nLogType);
 					}
 					strncpy_s(szOrg, sizeof(szOrg), pGuarder->szOrg, strlen(pGuarder->szOrg));
