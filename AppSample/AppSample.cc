@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-const char * kDefaultDeviceId = "3917677397"; //= "3917833482";  
+const char * kDefaultDeviceId = "3917677397"; //"3917677397"; //= "3917833482";  //"3917862376";
 
 struct MessageHead
 {
@@ -250,8 +250,9 @@ void send_func(SOCKET sock)
 		if (c == 'i' || c == 'I') { //test || test
 			if (!bLogin) {
 				char szMsg[256] = { 0 };
-				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test\",\"passwd\":\"test123\""
-					",\"datetime\":\"%s\"}", szDatetime);
+			//	snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"cpf\",\"passwd\":\"885891f7f148da294f784317c27a6c7d\""
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982179c0d0944dee43fb23d2\""
+				",\"datetime\":\"%s\",\"handset\":\"hksx\"}", szDatetime);
 				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test3\",\"passwd\":\"3cf2bc71982"
 				//	"179c0d0944dee43fb23d2\",\"datetime\":\"%s\"}", szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
@@ -298,7 +299,7 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"目的地\",\"target\":\"aaaabbbbcc&柳非\",\"datetime\":\"%s\"}", 
+					"\"destination\":\"台湾省无常大道443号\",\"target\":\"330571199010205541&志玲\",\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -482,11 +483,20 @@ void parse(RecvData * pRecvData)
 										printf("[PARSE]login task battery:%d\n", doc["taskInfo"][0]["battery"].GetInt());
 									}
 								}
+								if (doc["taskInfo"][0].HasMember("handset")) {
+									if (doc["taskInfo"][0]["handset"].IsString()) {
+										printf("[PARSE]login task handset:%s\n", doc["taskInfo"][0]["handset"].GetString());
+									}
+								}
 							}
 						}
 					}
 				}
 				else {
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 					printf("[PARSE]login failed, retcode=%d\n", nRet);
 				}
 				break;
@@ -508,6 +518,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]logout failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -532,6 +546,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]bind failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -551,6 +569,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]unbind failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -581,6 +603,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]task submit failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -607,6 +633,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]task close failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -634,6 +664,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]flee failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -657,6 +691,10 @@ void parse(RecvData * pRecvData)
 				}
 				else {
 					printf("[PARSE]revoke flee failed, retcode=%d\n", nRet);
+					if (nRet == 10) {
+						szSession[0] = '\0';
+						bLogin = false;
+					}
 				}
 				break;
 			}
@@ -783,6 +821,11 @@ void parse(RecvData * pRecvData)
 							if (doc["taskInfo"][0].HasMember("battery")) {
 								if (doc["taskInfo"][0]["battery"].IsInt()) {
 									printf("[PARSE]query task battery:%d\n", doc["taskInfo"][0]["battery"].GetInt());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("handset")) {
+								if (doc["taskInfo"][0]["handset"].IsString()) {
+									printf("[PARSE]query task handset:%s\n", doc["taskInfo"][0]["handset"].GetString());
 								}
 							}
 						}

@@ -124,7 +124,7 @@ namespace access_service
 		unsigned long ulTotalDataLen;
 		unsigned long ulLingeDataLen; 
 		unsigned long ulLackDataLen;	
-		unsigned char * pLingeData;
+		unsigned char * pLingeData;		
 		char szUser[20];
 		tagLinkData() 
 		{
@@ -295,10 +295,6 @@ namespace access_service
 		char szTaskId[12];
 		char szHandset[64];
 		int nActivated;//0:false, 1:true
-		int nNotifyBattery : 8;
-		int nNotifyStatus : 8;
-		int nNotifyPosition : 8;
-		int nNotifyOnline : 8;
 		unsigned long ulActivateTime;
 		tagAppLinkInfo()
 		{
@@ -312,10 +308,6 @@ namespace access_service
 			szHandset[0] = '\0';
 			nActivated = 0;
 			ulActivateTime = 0;
-			nNotifyBattery = 0;
-			nNotifyStatus = 0;
-			nNotifyPosition = 0;
-			nNotifyOnline = 0;
 		}
 	} AppLinkInfo;
 
@@ -344,6 +336,26 @@ namespace access_service
 			ulLastActiveTime = 0;
 		}
 	} RemoteLinkInfo;
+
+	typedef struct tagLingerNofityMessage
+	{
+		int nMessageType;
+		unsigned long ulMessageTime;
+		char szSession[20];
+		char szDevice[20];
+		char szMessage[256];
+		tagLingerNofityMessage()
+		{
+			szSession[0] = '\0';
+			szDevice[0] = '\0';
+			szMessage[0] = '\0';
+			ulMessageTime = 0;
+			nMessageType = -1;
+		}
+	} LingerNotifyMessage;
+
+	typedef std::queue<LingerNotifyMessage *> LingerNotifyMessageList;
+
 }
 
 //part1: connect and deal with app
@@ -421,11 +433,13 @@ protected:
 	int sendDataViaInteractor(const char * pData, size_t nDataLen);
 		
 	void dealNetwork();
-	void handleLinkDisconnect(const char * pEndpoint, const char * pUser, bool bFlag = true);
+	void handleLinkDisconnect(const char * pEndpoint, bool bFlag = true);
 	
 	void readDataBuffer();
 	void verifyLinkList();
 	bool verifyLink(const char * pEndpoint);
+	bool addLingerNotifyMessage(access_service::LingerNotifyMessage *);
+	void publishNotifyMessage(const char * szSession, const char * pEndpoint, const char * pDevice);
 
 	friend void * dealAppMsgThread(void *);
 	friend void * dealTopicMsgThread(void *);
@@ -491,6 +505,8 @@ private:
 	zhash_t * m_subscribeList;	//¶©ÔÄ  key:sub_filter|topic, value: AppSubscribeInfo *
 	pthread_mutex_t m_mutex4LocalTopicMsgList;
 	zlist_t * m_localTopicMsgList;	//TopicMessage
+	pthread_mutex_t m_mutex4LingerNotifyMsgList;
+	std::map<std::string, access_service::LingerNotifyMessageList *> m_lingerNotifyMsgList;
 
 	pthread_t m_pthdSupervisor;  //supervisor all the links 
 	zloop_t * m_loop;

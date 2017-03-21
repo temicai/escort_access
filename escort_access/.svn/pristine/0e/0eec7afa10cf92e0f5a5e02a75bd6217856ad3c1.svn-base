@@ -124,7 +124,7 @@ namespace access_service
 		unsigned long ulTotalDataLen;
 		unsigned long ulLingeDataLen; 
 		unsigned long ulLackDataLen;	
-		unsigned char * pLingeData;
+		unsigned char * pLingeData;		
 		char szUser[20];
 		tagLinkData() 
 		{
@@ -295,15 +295,11 @@ namespace access_service
 		char szTaskId[12];
 		char szHandset[64];
 		int nActivated;//0:false, 1:true
-		int nNotifyBattery : 8;
-		int nNotifyStatus : 8;
-		int nNotifyPosition : 8;
-		int nNotifyOnline : 8;
 		unsigned long ulActivateTime;
 		tagAppLinkInfo()
 		{
 			szSession[0] = '\0';
-			szGuarder[0] = '\0';
+			szSession[0] = '\0';
 			szEndpoint[0] = '\0';
 			szFactoryId[0] = '\0';
 			szDeviceId[0] = '\0';
@@ -312,10 +308,6 @@ namespace access_service
 			szHandset[0] = '\0';
 			nActivated = 0;
 			ulActivateTime = 0;
-			nNotifyBattery = 0;
-			nNotifyStatus = 0;
-			nNotifyPosition = 0;
-			nNotifyOnline = 0;
 		}
 	} AppLinkInfo;
 
@@ -344,6 +336,26 @@ namespace access_service
 			ulLastActiveTime = 0;
 		}
 	} RemoteLinkInfo;
+
+	typedef struct tagLingerNofityMessage
+	{
+		int nMessageType;
+		unsigned long ulMessageTime;
+		char szSession[20];
+		char szDevice[20];
+		char szMessage[256];
+		tagLingerNofityMessage()
+		{
+			szSession[0] = '\0';
+			szDevice[0] = '\0';
+			szMessage[0] = '\0';
+			ulMessageTime = 0;
+			nMessageType = -1;
+		}
+	} LingerNotifyMessage;
+
+	typedef std::queue<LingerNotifyMessage *> LingerNotifyMessageList;
+
 }
 
 //part1: connect and deal with app
@@ -374,7 +386,6 @@ protected:
 	void decryptMessage(unsigned char * pData, unsigned long ulBeginIndex, unsigned long ulEndIndex);
 	void encryptMessage(unsigned char * pData, unsigned long ulBeginIndex, unsigned long ulEndIndex);
 	void handleAppLogin(access_service::AppLoginInfo loginInfo, const char *, unsigned long);
-	void handleAppLoginEx(access_service::AppLoginInfo, const char *, unsigned long);
 	void handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char *, unsigned long);
 	void handleAppBind(access_service::AppBindInfo bindInfo, const char *, unsigned long);
 	void handleAppSubmitTask(access_service::AppSubmitTaskInfo taskInfo, const char *, unsigned long);
@@ -411,21 +422,17 @@ protected:
 	void removeSlaver();
 	int getMidwareData(const char * pPath, ZkMidware * pData);
 
-	void zkAddSession(const char * pSession);
-	void zkRemoveSession(const char * pSession);
-	void zkSetSession(const char * pSession);
-	void loadSessionList();
-
-
 	int sendDatatoEndpoint(const char * pData, size_t nDataLen, const char * pEndpoint);
 	int sendDataViaInteractor(const char * pData, size_t nDataLen);
 		
 	void dealNetwork();
-	void handleLinkDisconnect(const char * pEndpoint, const char * pUser, bool bFlag = true);
+	void handleLinkDisconnect(const char * pEndpoint, bool bFlag = true);
 	
 	void readDataBuffer();
 	void verifyLinkList();
 	bool verifyLink(const char * pEndpoint);
+	bool addLingerNotifyMessage(access_service::LingerNotifyMessage *);
+	void publishNotifyMessage(const char * szSession, const char * pEndpoint, const char * pDevice);
 
 	friend void * dealAppMsgThread(void *);
 	friend void * dealTopicMsgThread(void *);
@@ -445,11 +452,6 @@ protected:
 	friend void zk_access_master_exists_completion(int rc, const Stat * stat, const void * data);
 	friend void zk_access_set_completion(int rc, const struct Stat * stat, const void * data);
 	friend void zk_access_slaver_create_completion(int rc, const char * name, const void * data);
-	friend void zk_session_create_completion(int rc, const char * name, const void * data);
-	friend void zk_session_get_children_watcher(zhandle_t * zh, int type, int state, const char * path, void * watcherCtx);
-	friend void zk_session_child_delete_completion(int rc, const void * data);
-	friend void zk_session_child_create_completion(int rc, const char * name, const void * data);
-	friend void zk_session_child_set_completion(int rc, const struct Stat * stat, const void * data);
 private:
 	unsigned int m_uiSrvInst;
 	int m_nRun;
@@ -466,9 +468,7 @@ private:
 	zctx_t * m_ctx;
 	void * m_subscriber;	//订阅者
 	void * m_interactor;	//交互者
-	char m_szInteractorIdentity[40];
 	void * m_seeker;			//咨询者
-	char m_szSeekerIdentity[40];
 	pthread_t m_pthdNetwork;	//网络通信
 
 	zhandle_t * m_zkHandle;
@@ -491,6 +491,8 @@ private:
 	zhash_t * m_subscribeList;	//订阅  key:sub_filter|topic, value: AppSubscribeInfo *
 	pthread_mutex_t m_mutex4LocalTopicMsgList;
 	zlist_t * m_localTopicMsgList;	//TopicMessage
+	pthread_mutex_t m_mutex4LingerNotifyMsgList;
+	std::map<std::string, access_service::LingerNotifyMessageList *> m_lingerNotifyMsgList;
 
 	pthread_t m_pthdSupervisor;  //supervisor all the links 
 	zloop_t * m_loop;

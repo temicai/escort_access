@@ -124,7 +124,7 @@ void __stdcall fMsgCb(int nType, void * pMsg, void * pUserData)
 			}
 			case MSG_LINK_DISCONNECT: {
 				const char * pStrLink = (char *)pMsg;
-				pService->handleLinkDisconnect(pStrLink, NULL, true);
+				pService->handleLinkDisconnect(pStrLink);
 				break;
 			}
 			case MSG_DATA: {
@@ -150,7 +150,7 @@ void zk_server_watcher(zhandle_t * zh, int type, int state, const char * path, v
 	if (type == ZOO_SESSION_EVENT) {
 		AccessService * pInst = (AccessService *)watcherCtx;
 		if (state == ZOO_CONNECTED_STATE) {
-			if (pInst) {
+			if (pInst && pInst->m_nRun) {
 				pInst->m_bConnectZk = true;
 			}
 		}
@@ -159,7 +159,6 @@ void zk_server_watcher(zhandle_t * zh, int type, int state, const char * path, v
 				pInst->m_bConnectZk = false;
 				zookeeper_close(pInst->m_zkHandle);
 				pInst->m_zkHandle = NULL;
-				pInst->initZookeeper();
 			}
 		}
 	}
@@ -229,7 +228,6 @@ void zk_access_master_create_completion(int rc, const char * name, const void * 
 				pService->m_zkNodePath[nSize] = '\0';
 				pService->m_zkAccess.usRank = 1;
 				pService->setAccessData(name, &pService->m_zkAccess, sizeof(pService->m_zkAccess));
-				pService->loadSessionList();
 			}
 			break;
 		}
@@ -322,108 +320,6 @@ void zk_access_slaver_create_completion(int rc, const char * name, const void * 
 	}
 }
 
-void zk_session_create_completion(int rc, const char * name, const void * data)
-{
-	AccessService * pInst = (AccessService *)data;
-	if (rc == ZCONNECTIONLOSS || rc == ZOPERATIONTIMEOUT) {
-		if (pInst && pInst->m_nRun) {
-			zoo_acreate(pInst->m_zkHandle, "/escort/session", NULL, 0, &ZOO_OPEN_ACL_UNSAFE, 0,
-				zk_session_create_completion, data);
-		}
-	}
-}
-
-void zk_session_get_children_watcher(zhandle_t * zh, int type, int state, const char * path,
-	void * watcherCtx)
-{
-
-}
-
-void zk_session_child_delete_completion(int rc, const void * data)
-{
-	ZKSessionNode * pSessionNode = (ZKSessionNode *)data;
-	if (rc == ZCONNECTIONLOSS || rc == ZOPERATIONTIMEOUT) {
-		if (pSessionNode) {
-			AccessService * pService = (AccessService *)pSessionNode->data;
-			if (pService && pService->m_nRun) {
-				if (pService->m_zkHandle) {
-					char szSessionFullPath[128] = { 0 };
-					snprintf(szSessionFullPath, sizeof(szSessionFullPath), "/escort/session/%s", szSessionFullPath);
-					zoo_adelete(pService->m_zkHandle, szSessionFullPath, -1, zk_session_child_delete_completion, data);
-				}
-			}
-		}
-	}
-}
-
-void zk_session_child_create_completion(int rc, const char * name, const void * data)
-{
-	ZKSessionNode * pNode = (ZKSessionNode *)data;
-	if (rc == ZOPERATIONTIMEOUT || rc == ZCONNECTIONLOSS) {
-		AccessService * pService = (AccessService *)pNode->data;
-		if (pService && pService->m_nRun) {
-			char szBuf[1024] = { 0 };
-			access_service::AppLinkInfo * pLinkInfo = NULL;
-			size_t nLinkInfoSize = sizeof(access_service::AppLinkInfo);
-			pthread_mutex_lock(&pService->m_mutex4LinkList);
-			if (zhash_size(pService->m_linkList)) {
-				access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(pService->m_linkList, 
-					pNode->szSession);
-				if (pLink) {
-					pLinkInfo = (access_service::AppLinkInfo *)zmalloc(nLinkInfoSize);
-					memcpy_s(pLink, nLinkInfoSize, pLinkInfo, nLinkInfoSize);
-				}
-			}
-			pthread_mutex_unlock(&pService->m_mutex4LinkList);
-			if (pLinkInfo) {
-				if (pService->m_zkHandle) {
-					char szFullPath[128] = { 0 };
-					sprintf_s(szFullPath, sizeof(szFullPath), "/escort/session/%s", pNode->szSession);
-					const char * pBuf = szBuf;
-					zoo_acreate(pService->m_zkHandle, szFullPath, pBuf, 1024, &ZOO_OPEN_ACL_UNSAFE, 0,
-						zk_session_child_create_completion, data);
-				}
-				free(pLinkInfo);
-				pLinkInfo = NULL;
-			}
-		}
-	}
-}
-
-void zk_session_child_set_completion(int rc, const struct Stat * stat, const void * data)
-{
-	ZKSessionNode * pNode = (ZKSessionNode *)data;
-	if (rc == ZOPERATIONTIMEOUT || rc == ZCONNECTIONLOSS) {
-		if (pNode) {
-			AccessService * pService = (AccessService *)pNode->data;
-			if (pService && pService->m_nRun && pService->m_zkHandle) {
-				access_service::AppLinkInfo * pLinkInfo = NULL;
-				size_t nLinkInfoSize = sizeof(access_service::AppLinkInfo);
-				pthread_mutex_lock(&pService->m_mutex4LinkList);
-				if (zhash_size(pService->m_linkList)) {
-					access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(
-						pService->m_linkList, pNode->szSession);
-					if (pLink) {
-						pLinkInfo = new access_service::AppLinkInfo();
-						memcpy_s(pLinkInfo, nLinkInfoSize, pLink, nLinkInfoSize);
-					}
-				}
-				pthread_mutex_unlock(&pService->m_mutex4LinkList);
-				if (pLinkInfo) {
-					char szBuf[1024] = { 0 };
-					memcpy_s(szBuf, 1024, pLinkInfo, nLinkInfoSize);
-					const char * pBuf = szBuf;
-					char szPath[128] = { 0 };
-					sprintf_s(szPath, sizeof(szPath), "/escort/session/%s", pNode->szSession);
-					zoo_aset(pService->m_zkHandle, szPath, pBuf, 1024, -1, zk_session_child_set_completion, data);
-					delete pLinkInfo;
-					pLinkInfo = NULL;
-				}
-			}
-		}
-	}
-}
-
 AccessService::AccessService(const char * pZkHost, const char * pRoot)
 {
 	pthread_mutex_init(&m_mutex4LogQueue, NULL);
@@ -439,6 +335,7 @@ AccessService::AccessService(const char * pZkHost, const char * pRoot)
 	pthread_cond_init(&m_cond4TopicMsgQueue, NULL);
 	pthread_mutex_init(&m_mutex4LocalTopicMsgList, NULL);
 	pthread_mutex_init(&m_mutex4RemoteLink, NULL);
+	pthread_mutex_init(&m_mutex4LingerNotifyMsgList, NULL);
 	if (g_nRefCount == 0) {
 		pthread_mutex_init(&g_mutex4RequestSequence, NULL);
 		pthread_mutex_init(&g_mutex4DevList, NULL);
@@ -466,13 +363,11 @@ AccessService::AccessService(const char * pZkHost, const char * pRoot)
 	m_ctx = NULL;
 	m_interactor = NULL;
 	m_subscriber = NULL;
-	m_seeker = NULL;
-	m_szInteractorIdentity[0] = '\0';
-	m_szSeekerIdentity[0] = '\0';
 
 	m_linkList = zhash_new();
 	m_subscribeList = zhash_new();
 	m_localTopicMsgList = zlist_new();
+	m_lingerNotifyMsgList.clear();
 
 	m_szHost[0] = '\0';
 	m_szLogRoot[0] = '\0';
@@ -579,7 +474,6 @@ int AccessService::StartAccessService(const char * pHost, unsigned short usServi
 	zsocket_set_identity(m_interactor, szUuid);
 	zsocket_connect(m_interactor, "tcp://%s:%d", strlen(pMidwareHost) ? pMidwareHost : "127.0.0.1",
 		usContactPort > 0 ? usContactPort : 25001);
-	strcpy_s(m_szInteractorIdentity, sizeof(m_szInteractorIdentity), szUuid);
 	zuuid_destroy(&uuid);
 
 	m_seeker = zsocket_new(m_ctx, ZMQ_REQ);
@@ -639,13 +533,12 @@ int AccessService::StartAccessService(const char * pHost, unsigned short usServi
 			snprintf(m_zkAccess.szHostIp, sizeof(m_zkAccess.szHostIp), "127.0.0.1");
 		}
 		m_zkAccess.usAccessPort = usServicePort;
+		competeForMaster();
 
 		if (g_bInitBuffer == FALSE) {
 			readDataBuffer();
 			g_bInitBuffer = TRUE;
 		}
-
-		competeForMaster();
 
 		char szLog[256] = { 0 };
 		snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]access service start %u\r\n", __FUNCTION__, 
@@ -718,9 +611,6 @@ int AccessService::StopAccessService()
 		m_seeker = NULL;
 		m_ctx = NULL;
 	}
-
-	m_szInteractorIdentity[0] = '\0';
-	m_szSeekerIdentity[0] = '\0';
 
 	//删除zookeeper自身节点
 	if (m_bConnectZk) {
@@ -1007,17 +897,15 @@ void AccessService::parseAppMsg(MessageContent * pMsg)
 											bValidDatetime = true;
 										}
 									}
-									if (doc.HasMember("handset")) {
-										if (doc["handset"].IsString()) {
-											size_t nSize = doc["handset"].GetStringLength();
-											if (nSize) {
-												strncpy_s(loginInfo.szHandset, sizeof(loginInfo.szHandset), doc["handset"].GetString(), nSize);
-											}
+									if (doc["handset"].IsString()) {
+										size_t nSize = doc["handset"].GetStringLength();
+										if (nSize) {
+											strncpy_s(loginInfo.szHandset, sizeof(loginInfo.szHandset), doc["handset"].GetString(), nSize);
 										}
 									}
 									if (bValidAccount && bValidPasswd && bValidDatetime) {
 										loginInfo.uiReqSeq = 0;	//loginInfo.uiReqSeq = getNextRequestSequence();
-										handleAppLoginEx(loginInfo, pMsg->szEndPoint, pMsg->ulMsgTime);
+										handleAppLogin(loginInfo, pMsg->szEndPoint, pMsg->ulMsgTime);
 									}
 									else {
 										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login request from %s, one or more"
@@ -1807,8 +1695,9 @@ void AccessService::encryptMessage(unsigned char * pData, unsigned long ulBeginI
 }
 
 //action: login 
-//condition:  c1-check guarder(user) wether "login" already | consider the matter <guarder(user) re-login>,
-//how to handle check passwd
+//condition:  c1-check guarder(user) wether "login" already | consider the matter <guarder(user) re-login>, how to handle 
+//							 check passwd			
+//
 void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const char * pEndPoint, 
 	unsigned long ulTime)
 {
@@ -1819,15 +1708,14 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 	bool bHaveTask = false;
 	char szSession[20] = { 0 };
 	char szCurrTaskId[12] = { 0 };
-	char szReply[1024] = { 0 };
-	char szTaskInfo[512] = { 0 };
+	char szReply[512] = { 0 };
+	char szTaskInfo[256] = { 0 };
 	EscortTask * pCurrTask = NULL;
 	unsigned short usDeviceStatus = 0;
 	unsigned char ucDeviceBattery = 0;
 	unsigned char ucDeviceLooseState = 0;
 	bool bReLogin = false;
 	//1-1.check from g_guarderList, 1-2.check from db-prox
-	bool bNeedReloadData = false;
 	pthread_mutex_lock(&g_mutex4GuarderList);
 	if (zhash_size(g_guarderList)) {
 		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, loginInfo.szUser);
@@ -1855,35 +1743,13 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 							}
 						}
 						else {
-							if (verifyLink(pGuarder->szLink)) {
-								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s, already have link=%s in use,"
-									" from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, pGuarder->szLink, pEndPoint);
-								writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-								nErr = E_ACCOUNTINUSE;
-							}
-							else {
-								TS_CloseEndpoint(m_uiSrvInst, pGuarder->szLink);
-								if (strcmp(pGuarder->szPassword, loginInfo.szPasswd) == 0) {
-									bReLogin = true;
-									strncpy_s(szSession, sizeof(szSession), pGuarder->szCurrentSession,
-										strlen(pGuarder->szCurrentSession));
-									if (pGuarder->usState == STATE_GUARDER_DUTY && strlen(pGuarder->szTaskId) > 0) {
-										strncpy_s(szCurrTaskId, sizeof(szCurrTaskId), pGuarder->szTaskId,
-											strlen(pGuarder->szTaskId));
-										bHaveTask = true;
-									}
-									strcpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndPoint);
-								}
-								else {
-									nErr = E_INVALIDPASSWD;
-									snprintf(szLog, sizeof(szLog), "user=%s, link=%s, incorrected password\n",
-										loginInfo.szUser, pEndPoint);
-									printf(szLog);
-								}
-							}
+							snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s, already have link=%s in use,"
+								" from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, pGuarder->szLink, pEndPoint);
+							writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+							nErr = E_ACCOUNTINUSE;
 						}
 					}
-					else { //link empty
+					else {
 						if (strcmp(pGuarder->szPassword, loginInfo.szPasswd) == 0) {
 							bReLogin = true;
 							strncpy_s(szSession, sizeof(szSession), pGuarder->szCurrentSession,
@@ -1901,12 +1767,12 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 							nErr = E_INVALIDPASSWD;
 						}
 					}
-				} 
-				else {  //not exists session
+				}
+				else {
 					if (pGuarder->usState == STATE_GUARDER_DEACTIVATE) {
 						nErr = E_INVALIDACCOUNT;
-						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s deactivate, from=%s\r\n",
-							__FUNCTION__, __LINE__, loginInfo.szUser, pEndPoint);
+						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s, already have link=%s in use,"
+							" from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, pGuarder->szLink, pEndPoint);
 						writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 					}
 					else {
@@ -1937,15 +1803,6 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 				nErr = E_INVALIDACCOUNT;
 			}
 		}
-		else {
-			nErr = E_INVALIDACCOUNT;
-		}
-	}
-	else {
-		snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]not load guarderlist\r\n", __FUNCTION__, __LINE__);
-		writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
-		nErr = E_DEFAULTERROR;
-		bNeedReloadData = true;
 	}
 	pthread_mutex_unlock(&g_mutex4GuarderList);
 	//1-2.
@@ -2047,7 +1904,7 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 					ucDeviceBattery = pDev->deviceBasic.nBattery;
 					ucDeviceLooseState = pDev->deviceBasic.nLooseStatus; 
 				}
-			} 
+			}
 			pthread_mutex_unlock(&g_mutex4DevList);
 		}
 	}
@@ -2178,353 +2035,6 @@ void AccessService::handleAppLogin(access_service::AppLoginInfo loginInfo, const
 		" session=%s, from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, loginInfo.szDateTime, 
 		loginInfo.szHandset, nErr, szSession, pEndPoint);
 	writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-	if (bNeedReloadData) {
-		readDataBuffer();
-	}
-}
-
-void AccessService::handleAppLoginEx(access_service::AppLoginInfo loginInfo, const char * pEndpoint,
-	unsigned long ulTime)
-{
-	char szLog[512] = { 0 };
-	int nErr = E_OK;
-	bool bNeedReloadData = false;
-	bool bHaveTask = false;
-	char szCurrentTaskId[20] = { 0 };
-	char szCurrentBindDeviceId[20] = { 0 };
-	char szCurrentSession[20] = { 0 };
-	char szLastestSession[20] = { 0 };
-	bool bNeedGenerateSession = false; 
-	unsigned short usDeviceBattery = 0;
-	unsigned short usDeviceStatus = 0;
-	pthread_mutex_lock(&g_mutex4GuarderList);
-	if (zhash_size(g_guarderList)) {
-		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, loginInfo.szUser);
-		if (pGuarder) {
-			if ((pGuarder->usRoleType & USER_ROLE_OPERATOR) != 0) {
-				if (strlen(pGuarder->szCurrentSession) > 0) {
-					strncpy_s(szCurrentSession, sizeof(szCurrentSession), pGuarder->szCurrentSession,
-						strlen(pGuarder->szCurrentSession));
-					if (strlen(pGuarder->szLink) > 0) {
-						if (strcmp(pGuarder->szLink, pEndpoint) != 0) {
-							snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s, already have link=%s"
-								" in user, from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, pGuarder->szLink,
-								pEndpoint);
-							writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-							nErr = E_ACCOUNTINUSE;
-							//if (verifyLink(pGuarder->szLink)) {
-							//	nErr = E_ACCOUNTINUSE;
-							//}
-							//else {
-							//	if (strcmp(pGuarder->szPassword, loginInfo.szPasswd) == 0) {
-							//		if (pGuarder->usState == STATE_GUARDER_BIND) {
-							//			if (strlen(pGuarder->szBindDevice)) {
-							//				strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-							//					strlen(pGuarder->szBindDevice));
-							//			}
-							//		}
-							//		else if (pGuarder->usState == STATE_GUARDER_DUTY) {
-							//			if (strlen(pGuarder->szTaskId)) {
-							//				strncpy_s(szCurrentTaskId, sizeof(szCurrentTaskId), pGuarder->szTaskId, 
-							//					strlen(pGuarder->szTaskId));
-							//				bHaveTask = true;
-							//			}
-							//			if (strlen(pGuarder->szBindDevice)) {
-							//				strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-							//					strlen(pGuarder->szBindDevice));
-							//			}
-							//		}
-							//		bNeedGenerateSession = true;
-							//	}
-							//	else {
-							//		nErr = E_INVALIDPASSWD;
-							//	}
-							//	TS_CloseEndpoint(m_uiSrvInst, pGuarder->szLink);
-							//}
-						}
-						else { //same link
-							if (strcmp(pGuarder->szPassword, loginInfo.szPasswd) == 0) {
-								if (pGuarder->usState == STATE_GUARDER_BIND) {
-									if (strlen(pGuarder->szBindDevice)) {
-										strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-											strlen(pGuarder->szBindDevice));
-									}
-								}
-								else if (pGuarder->usState == STATE_GUARDER_DUTY) {
-									if (strlen(pGuarder->szTaskId) > 0) {
-										strncpy_s(szCurrentTaskId, sizeof(szCurrentTaskId), pGuarder->szTaskId, 
-											strlen(pGuarder->szTaskId));
-										bHaveTask = true;
-									}
-									if (strlen(pGuarder->szBindDevice)) {
-										strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-											strlen(pGuarder->szBindDevice));
-									}
-								}
-								bNeedGenerateSession = false;
-							}
-							else {
-								nErr = E_INVALIDPASSWD;
-							}
-						}
-					}
-					else { //link disconnect
-						if (strcmp(pGuarder->szPassword, loginInfo.szPasswd) == 0) {
-							if (pGuarder->usState == STATE_GUARDER_BIND) {
-								if (strlen(pGuarder->szBindDevice)) {
-									strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-										strlen(pGuarder->szBindDevice));
-								}
-							}
-							else if (pGuarder->usState == STATE_GUARDER_DUTY) {
-								if (strlen(pGuarder->szTaskId)) {
-									strncpy_s(szCurrentTaskId, sizeof(szCurrentTaskId), pGuarder->szTaskId,
-										strlen(pGuarder->szTaskId));
-									bHaveTask = true;
-								}
-								if (strlen(pGuarder->szBindDevice)) {
-									strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-										strlen(pGuarder->szBindDevice));
-								}
-							}
-							bNeedGenerateSession = true;
-						}
-						else {
-							nErr = E_INVALIDPASSWD;
-						}
-					}
-				}
-				else { //no session
-					if (pGuarder->usState == STATE_GUARDER_DEACTIVATE) {
-						nErr = E_UNAUTHORIZEDACCOUNT;
-					}
-					else {
-						if (strcmp(pGuarder->szPassword, loginInfo.szPasswd) == 0) {
-							if (pGuarder->usState == STATE_GUARDER_BIND) {
-								strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-									strlen(pGuarder->szBindDevice));
-							}
-							else if (pGuarder->usState == STATE_GUARDER_DUTY) {
-								if (strlen(pGuarder->szTaskId) > 0) {
-									strncpy_s(szCurrentTaskId, sizeof(szCurrentTaskId), pGuarder->szTaskId, 
-										strlen(pGuarder->szTaskId));
-									strncpy_s(szCurrentBindDeviceId, sizeof(szCurrentBindDeviceId), pGuarder->szBindDevice,
-										strlen(pGuarder->szBindDevice));
-									bHaveTask = true;
-								}
-							}
-							bNeedGenerateSession = true;
-						}
-						else {
-							nErr = E_INVALIDPASSWD;
-						}
-					}
-				}
-			}
-			else {
-				nErr = E_UNAUTHORIZEDACCOUNT;
-			}
-		}
-		else {
-			nErr = E_INVALIDACCOUNT;
-		}
-	}
-	else {
-		nErr = E_DEFAULTERROR;
-		bNeedReloadData = true;
-		snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]guarder list is empty, need reload data\r\n",
-			__FUNCTION__, __LINE__);
-		writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
-	}
-	pthread_mutex_unlock(&g_mutex4GuarderList);
-	if (nErr == E_OK) {
-		char szFactoryId[4] = { 0 };
-		char szOrg[40] = { 0 };
-		char szTaskInfo[512] = { 0 };
-		char szReply[1024] = { 0 };
-		if (bNeedGenerateSession) {
-			generateSession(szLastestSession, sizeof(szLastestSession));
-		}
-		else {
-			if (strlen(szCurrentSession)) {
-				strncpy_s(szLastestSession, sizeof(szLastestSession), szCurrentSession, strlen(szCurrentSession));
-			}
-		}
-		if (strlen(szCurrentBindDeviceId)) {
-			pthread_mutex_lock(&g_mutex4DevList);
-			if (zhash_size(g_deviceList)) {
-				WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList, szCurrentBindDeviceId);
-				if (pDevice) {
-					usDeviceStatus = pDevice->deviceBasic.nStatus;
-					usDeviceBattery = (unsigned short)pDevice->deviceBasic.nBattery;
-					strcpy_s(szFactoryId, sizeof(szFactoryId), pDevice->deviceBasic.szFactoryId);
-					strcpy_s(szOrg, sizeof(szOrg), pDevice->szOrganization);
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4DevList);
-		}
-		EscortTask * pCurrentTask = NULL;
-		bool bModifyTask = false;
-		if (strlen(szCurrentTaskId)) {
-			pthread_mutex_lock(&g_mutex4TaskList);
-			if (zhash_size(g_taskList)) {
-				EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, szCurrentTaskId);
-				if (pTask) {
-					if (pTask->nTaskMode == 0) {
-						if (strlen(loginInfo.szHandset)) {
-							pTask->nTaskMode = 1;
-							strncpy_s(pTask->szHandset, sizeof(pTask->szHandset), loginInfo.szHandset,
-								strlen(loginInfo.szHandset));
-							bModifyTask = true;
-						}
-					}
-					else if (pTask->nTaskMode == 1) {
-						if (strlen(loginInfo.szHandset)) {//current login with handset
-							if (strlen(pTask->szHandset)) { //task last handset is not empty
-								if (strcmp(pTask->szHandset, loginInfo.szHandset) != 0) { //change task handset
-									bModifyTask = true;
-									strncpy_s(pTask->szHandset, sizeof(pTask->szHandset), loginInfo.szHandset,
-										strlen(loginInfo.szHandset));
-								}
-							}
-							else { //task last handset is empty
-								bModifyTask = true;
-								strncpy_s(pTask->szHandset, sizeof(pTask->szHandset), loginInfo.szHandset,
-									strlen(loginInfo.szHandset));
-							}
-						} 
-						else {
-							if (strlen(pTask->szHandset)) {
-								bModifyTask = true;
-								pTask->szHandset[0] = '\0';
-							}
-						}
-					}
-					size_t nTaskSize = sizeof(EscortTask);
-					pCurrentTask = (EscortTask *)zmalloc(nTaskSize);
-					memcpy_s(pCurrentTask, nTaskSize, pTask, nTaskSize);
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4TaskList);
-		}
-		if (bHaveTask && pCurrentTask) {
-			snprintf(szTaskInfo, sizeof(szTaskInfo), "{\"taskId\":\"%s\",\"deviceId\":\"%s\",\"type\":%d,"
-				"\"limit\":%d,\"destination\":\"%s\",\"target\":\"%s\",\"startTime\":\"%s\",\"battery\":%hu"
-				",\"deviceState\":%hu,\"handset\":\"%s\"}", pCurrentTask->szTaskId, pCurrentTask->szDeviceId,
-				pCurrentTask->nTaskType + 1, pCurrentTask->nTaskLimitDistance, pCurrentTask->szDestination,
-				pCurrentTask->szTarget, pCurrentTask->szTaskStartTime, usDeviceBattery, usDeviceStatus, 
-				loginInfo.szHandset);
-			snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":0,\"session\":\"%s\",\"taskInfo\""
-				":[%s]}", access_service::E_CMD_LOGIN_REPLY, szLastestSession, szTaskInfo);
-			sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint);
-		}
-		else {
-			if (strlen(szCurrentBindDeviceId)) {
-				snprintf(szTaskInfo, sizeof(szTaskInfo), "{\"deviceId\":\"%s\",\"battery\":%hu,\"deviceState\":"
-					"\"%hu\"}", szCurrentBindDeviceId, usDeviceBattery, usDeviceStatus);
-				snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":0,\"session\":\"%s\",\"taskInfo\""
-					":[%s]}", access_service::E_CMD_LOGIN_REPLY, szLastestSession, ""/*szTaskInfo*/);
-				sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint);
-			}
-			else {
-				snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":0,\"session\":\"%s\",\"taskInfo\":[]}",
-					access_service::E_CMD_LOGIN_REPLY, szLastestSession);
-				sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint);
-			}
-		}
-		if (bModifyTask) {
-			char szBody[512] = { 0 };
-			snprintf(szBody, sizeof(szBody), "{\"mark\":\"EC\",\"version\":\"10\",\"type\":%d,\"sequence\":"
-				"%u,\"datetime\":\"%s\",\"report\":[{\"subType\":%d,\"taskId\":\"%s\",\"handset\":\"%s\"}]}",
-				MSG_SUB_REPORT, loginInfo.uiReqSeq, loginInfo.szDateTime, SUB_REPORT_TASK_MODIFY,
-				pCurrentTask->szTaskId, loginInfo.szHandset);
-			sendDataViaInteractor(szBody, strlen(szBody));
-		}
-		//update guarder
-		pthread_mutex_lock(&g_mutex4GuarderList);
-		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, loginInfo.szUser);
-		if (pGuarder) {
-			strcpy_s(pGuarder->szCurrentSession, sizeof(pGuarder->szCurrentSession), szLastestSession);
-			strcpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndpoint);
-		}
-		pthread_mutex_unlock(&g_mutex4GuarderList);
-		//update link
-		size_t nLinkInfoSize = sizeof(access_service::AppLinkInfo);
-		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zmalloc(nLinkInfoSize);
-		strcpy_s(pLink->szGuarder, sizeof(pLink->szGuarder), loginInfo.szUser);
-		strcpy_s(pLink->szSession, sizeof(pLink->szSession), szLastestSession);
-		strcpy_s(pLink->szEndpoint, sizeof(pLink->szEndpoint), pEndpoint);
-		if (strlen(loginInfo.szHandset)) {
-			strcpy_s(pLink->szHandset, sizeof(pLink->szHandset), loginInfo.szHandset);
-		}
-		if (strlen(szCurrentBindDeviceId)) {
-			strcpy_s(pLink->szFactoryId, sizeof(pLink->szFactoryId), szFactoryId);
-			strcpy_s(pLink->szDeviceId, sizeof(pLink->szDeviceId), szCurrentBindDeviceId);
-			strcpy_s(pLink->szOrg, sizeof(pLink->szOrg), szOrg);
-		}
-		if (bHaveTask && pCurrentTask) {
-			strcpy_s(pLink->szTaskId, sizeof(pLink->szTaskId), pCurrentTask->szTaskId);
-		}
-		pLink->nActivated = 1;
-		pLink->ulActivateTime = ulTime;
-		
-		pthread_mutex_lock(&m_mutex4LinkList);
-		if (bNeedGenerateSession && strlen(szCurrentSession)) {
-			zhash_delete(m_linkList, szCurrentSession);
-		}
-		zhash_update(m_linkList, szLastestSession, pLink);
-		zhash_freefn(m_linkList, szLastestSession, free);
-		pthread_mutex_unlock(&m_mutex4LinkList);
-
-		if (bNeedGenerateSession && strlen(szCurrentSession)) {
-			snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]remove session=%s\r\n", __FUNCTION__,
-				__LINE__, szCurrentSession);
-			writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-			zkRemoveSession(szCurrentSession);
-		}
-		zkAddSession(szLastestSession);
-		
-		pthread_mutex_lock(&m_mutex4LinkDataList); //update linkdatalist, add Guarder to handle disconnect
-		std::string strLink = pEndpoint;
-		std::map<std::string, access_service::LinkDataInfo *>::iterator iter = m_linkDataList.find(strLink);
-		if (iter != m_linkDataList.end()) {
-			access_service::LinkDataInfo * pLinkData = iter->second;
-			strncpy_s(pLinkData->szUser, sizeof(pLinkData->szUser), loginInfo.szUser, strlen(loginInfo.szUser));
-		}
-		pthread_mutex_unlock(&m_mutex4LinkDataList);
-
-		if (pCurrentTask) {
-			char szTopic[64] = { 0 };
-			snprintf(szTopic, sizeof(szTopic), "%s_%s_%s", pCurrentTask->szOrg, pCurrentTask->szFactoryId,
-				pCurrentTask->szDeviceId);
-			access_service::AppSubscirbeInfo * pSubInfo;
-			pSubInfo = (access_service::AppSubscirbeInfo *)zmalloc(sizeof(access_service::AppSubscirbeInfo));
-			strcpy_s(pSubInfo->szEndpoint, sizeof(pSubInfo->szEndpoint), pEndpoint);
-			strcpy_s(pSubInfo->szGuarder, sizeof(pSubInfo->szGuarder), pCurrentTask->szGuarder);
-			strcpy_s(pSubInfo->szSession, sizeof(pSubInfo->szSession), szLastestSession);
-			strcpy_s(pSubInfo->szSubFilter, sizeof(pSubInfo->szSubFilter), szTopic);
-			pthread_mutex_lock(&m_mutex4SubscribeList);
-			zhash_update(m_subscribeList, szTopic, pSubInfo);
-			zhash_freefn(m_subscribeList, szTopic, free);
-			pthread_mutex_unlock(&m_mutex4SubscribeList);
-			free(pCurrentTask);
-			pCurrentTask = NULL;
-		}
-
-	}
-	else {
-		char szReply[256] = { 0 };
-		snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"retcode\":%d,\"session\":\"\",\"taskInfo\":[]}",
-			access_service::E_CMD_LOGIN_REPLY, nErr);
-		sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint);
-	}
-	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]login user=%s, datetime=%s, handset=%s, result=%d,"
-		" session=%s, from=%s\r\n", __FUNCTION__, __LINE__, loginInfo.szUser, loginInfo.szDateTime,
-		loginInfo.szHandset, nErr, szLastestSession, pEndpoint);
-	writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-	if (bNeedReloadData) {
-		readDataBuffer();
-	}
 }
 
 void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char * pEndPoint, 
@@ -2591,9 +2101,29 @@ void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, co
 		}
 		zhash_delete(m_linkList, logoutInfo.szSession);
 		pthread_mutex_unlock(&m_mutex4LinkList);
-
-		zkRemoveSession(logoutInfo.szSession);
-
+		//remove lingerMessageList
+		pthread_mutex_lock(&m_mutex4LingerNotifyMsgList);
+		if (!m_lingerNotifyMsgList.empty()) {
+			std::map<std::string, access_service::LingerNotifyMessageList *>::iterator iter;
+			iter = m_lingerNotifyMsgList.find(logoutInfo.szSession);
+			if (iter != m_lingerNotifyMsgList.end()) {
+				access_service::LingerNotifyMessageList * pLingerMsgList = iter->second;
+				if (pLingerMsgList) {
+					while (!pLingerMsgList->empty()) {
+						access_service::LingerNotifyMessage * pLingerMsg = pLingerMsgList->front();
+						pLingerMsgList->pop();
+						if (pLingerMsg) {
+							delete pLingerMsg;
+							pLingerMsg = NULL;
+						}
+					}
+					delete pLingerMsgList;
+					pLingerMsgList = NULL;
+				}
+				m_lingerNotifyMsgList.erase(logoutInfo.szSession);
+			}
+		}
+		pthread_mutex_unlock(&m_mutex4LingerNotifyMsgList);
 		if (strlen(szDevKey)) {
 			pthread_mutex_lock(&g_mutex4DevList);
 			if (g_deviceList) {
@@ -2632,7 +2162,7 @@ void AccessService::handleAppLogout(access_service::AppLogoutInfo logoutInfo, co
 void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const char * pEndPoint, 
 	unsigned long ulTime)
 {
-	char szLog[512] = { 0 };
+	char szLog[256] = { 0 };
 	int nErr = E_OK;
 	char szReply[256] = { 0 };
 	bool bFindLink = false;
@@ -2677,6 +2207,8 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 						}
 						else {
 							bValidGuarder = true;
+							strncpy_s(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), bindInfo.szDeviceId, 
+								strlen(bindInfo.szDeviceId));
 						}
 					}
 					else if (pGuarder->usState == STATE_GUARDER_DUTY && strlen(pGuarder->szTaskId) > 0) {
@@ -2835,10 +2367,10 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 							}
 							else {
 								bValidGuarder = true;
-								//if (strcmp(pGuarder->szLink, pEndPoint) != 0) {
-								//	strncpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndPoint, strlen(pEndPoint));
-								//	bUpdateLink = true;
-								//}
+								if (strcmp(pGuarder->szLink, pEndPoint) != 0) {
+									strncpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndPoint, strlen(pEndPoint));
+									bUpdateLink = true;
+								}
 							}
 						}
 						strncpy_s(szOrg, sizeof(szOrg), pGuarder->szOrg, strlen(pGuarder->szOrg));
@@ -2867,10 +2399,10 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 									writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 									nErr = E_GUARDERNOTMATCH;
 								}
-								//else {//ok, update device here
-								//	pDev->szBindGuard[0] = '\0';
-								//	pDev->ulBindTime = 0;
-								//}
+								else {//ok, update device here
+									pDev->szBindGuard[0] = '\0';
+									pDev->ulBindTime = 0;
+								}
 							}
 						}
 						strncpy_s(szFactory, sizeof(szFactory), pDev->deviceBasic.szFactoryId, 
@@ -2953,7 +2485,6 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 				zhash_update(m_subscribeList, szTopic, pSubInfo);
 				zhash_freefn(m_subscribeList, szTopic, free);
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
-				zkSetSession(bindInfo.szSesssion);
 				snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]add new subscriber for %s, link=%s\r\n", 
 					__FUNCTION__, __LINE__, szTopic, pEndPoint);
 				writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
@@ -2973,14 +2504,6 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 					pGuarder->usState = STATE_GUARDER_FREE;
 				}
 				pthread_mutex_unlock(&g_mutex4GuarderList);
-				pthread_mutex_lock(&g_mutex4DevList);
-				WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, bindInfo.szDeviceId);
-				if (pDev) {
-					pDev->szBindGuard[0] = '\0';
-					pDev->ulBindTime = 0;
-				}
-				pthread_mutex_unlock(&g_mutex4DevList);
-
 				pthread_mutex_lock(&m_mutex4LinkList);
 				access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
 					bindInfo.szSesssion);
@@ -2988,21 +2511,34 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 					pLink->szDeviceId[0] = '\0';
 					pLink->szFactoryId[0] = '\0';
 					pLink->szOrg[0] = '\0';
-					pLink->nNotifyBattery = 0;
-					pLink->nNotifyOnline = 0;
-					pLink->nNotifyPosition = 0;
-					pLink->nNotifyStatus = 0;
 				}
 				pthread_mutex_unlock(&m_mutex4LinkList);
-				
 				//remove subsciber
 				char szTopic[64] = { 0 };
 				snprintf(szTopic, sizeof(szTopic), "%s_%s_%s", szOrg, szFactory, bindInfo.szDeviceId);
 				pthread_mutex_lock(&m_mutex4SubscribeList);
 				zhash_delete(m_subscribeList, szTopic);
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
-				
-				zkSetSession(bindInfo.szSesssion);
+				//remove lingerMessageList
+				pthread_mutex_lock(&m_mutex4LingerNotifyMsgList);
+				if (!m_lingerNotifyMsgList.empty()) {
+					std::map<std::string, access_service::LingerNotifyMessageList *>::iterator iter;
+					iter = m_lingerNotifyMsgList.find(bindInfo.szSesssion);
+					if (iter != m_lingerNotifyMsgList.end()) {
+						access_service::LingerNotifyMessageList * pLingerMsgList = iter->second;
+						if (pLingerMsgList) {
+							while (!pLingerMsgList->empty()) {
+								access_service::LingerNotifyMessage * pLingerMsg = pLingerMsgList->front();
+								pLingerMsgList->pop();
+								if (pLingerMsg) {
+									delete pLingerMsg;
+									pLingerMsg = NULL;
+								}
+							}
+						}
+					}
+				}
+				pthread_mutex_unlock(&m_mutex4LingerNotifyMsgList);
 			}
 		}
 		else {
@@ -3017,13 +2553,12 @@ void AccessService::handleAppBind(access_service::AppBindInfo bindInfo, const ch
 				strncpy_s(pLink->szOrg, sizeof(pLink->szOrg), szOrg, strlen(szOrg));
 			}
 			pthread_mutex_unlock(&m_mutex4LinkList);
-			zkSetSession(bindInfo.szSesssion);
 		}
-	}
+	}	
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]seq=%lu, %s, device=%s, factoryId=%s, session=%s,"
-		" guarder=%s, datetime=%s, org=%s, result=%d, from=%s\r\n", __FUNCTION__, __LINE__, bindInfo.uiReqSeq, 
+		" datetime=%s, org=%s, result=%d, from=%s\r\n", __FUNCTION__, __LINE__, bindInfo.uiReqSeq, 
 		(bindInfo.nMode == 0) ? "bind" : "unbind", bindInfo.szDeviceId, strlen(szFactory) ? szFactory : "01",
-		bindInfo.szSesssion, szGuarder, bindInfo.szDateTime, szOrg, nErr, pEndPoint);
+		bindInfo.szSesssion, bindInfo.szDateTime, szOrg, nErr, pEndPoint);
 	writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 }
 
@@ -3250,9 +2785,8 @@ void AccessService::handleAppSubmitTask(access_service::AppSubmitTaskInfo taskIn
 			}
 		}
 		pthread_mutex_unlock(&m_mutex4LinkList);
-		zkSetSession(taskInfo.szSession);
 	}
-	//publishNotifyMessage(taskInfo.szSession, pEndpoint, szDeviceId);
+	publishNotifyMessage(taskInfo.szSession, pEndpoint, szDeviceId);
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]submit task %d: session=%s, type=%u, limit=%u,"
 		" target=%s, destination=%s, datetime=%s, result=%d, taskId=%s, handset=%s, from=%s\r\n", __FUNCTION__,
 		__LINE__, taskInfo.uiReqSeq, taskInfo.szSession, taskInfo.usTaskType - 1, taskInfo.usTaskLimit, 
@@ -3412,10 +2946,8 @@ void AccessService::handleAppCloseTask(access_service::AppCloseTaskInfo taskInfo
 		pthread_mutex_lock(&g_mutex4TaskList);
 		zhash_delete(g_taskList, taskInfo.szTaskId);
 		pthread_mutex_unlock(&g_mutex4TaskList);
-
-		zkSetSession(taskInfo.szSession);
 	}
-	//publishNotifyMessage(taskInfo.szSession, pEndpoint, szDeviceId);
+	publishNotifyMessage(taskInfo.szSession, pEndpoint, szDeviceId);
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]submit close task, session=%s, taskId=%s, "
 		"datetime=%s, result=%d, from=%s\r\n", __FUNCTION__, __LINE__, taskInfo.szSession, taskInfo.szTaskId, 
 		taskInfo.szDatetime, nErr, pEndpoint);
@@ -3432,13 +2964,6 @@ void AccessService::handleAppPosition(access_service::AppPositionInfo posInfo, c
 	char szFilter[64] = { 0 };
 	char szGuarder[20] = { 0 };
 	bool bUpdateLink = false;
-	bool bNotifyBattery = false;
-	bool bNotifyOffline = false;
-	bool bNotifyPosition = false;
-	bool bNotifyLoose = false;
-	unsigned short usBattery = 0;
-	unsigned short usLoose = 0;
-	double dLat = 0.00, dLng = 0.00;
 	pthread_mutex_lock(&m_mutex4LinkList);
 	if (zhash_size(m_linkList)) {
 		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, 
@@ -3456,33 +2981,22 @@ void AccessService::handleAppPosition(access_service::AppPositionInfo posInfo, c
 					strncpy_s(pLink->szEndpoint, sizeof(pLink->szEndpoint), pEndpoint, strlen(pEndpoint));
 					bUpdateLink = true;
 				}
-				if (pLink->nNotifyOnline) {
-					bNotifyOffline = true;
-					pLink->nNotifyOnline = 0;
-					pLink->nNotifyBattery = 0;
-					bNotifyBattery = false;
-				}
-				else {
-					if (pLink->nNotifyBattery) {
-						bNotifyBattery = true;
-						pLink->nNotifyBattery = 0;
-						pLink->nNotifyOnline = 0;
-						bNotifyOffline = false;
-					}
-				}
-				if (pLink->nNotifyStatus) {
-					bNotifyLoose = true;
-					pLink->nNotifyStatus = 0;
-				}
-				if (pLink->nNotifyPosition) {
-					bNotifyPosition = true;
-					pLink->nNotifyPosition = 0;
-				}
 			}
 		}
 	}
 	pthread_mutex_unlock(&m_mutex4LinkList);
 	if (bValidLink) {
+		publishNotifyMessage(posInfo.szSession, pEndpoint, szDevice);
+		//pthread_mutex_lock(&g_mutex4TaskList);
+		//if (zhash_size(g_taskList)) {
+		//	EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, posInfo.szTaskId);
+		//	if (pTask) {
+		//		strncpy_s(szDevice, sizeof(szDevice), pTask->szDeviceId, strlen(pTask->szDeviceId));
+		//		bValidTask = true;
+		//	}
+		//}
+		//pthread_mutex_unlock(&g_mutex4TaskList);
+		//if (bValidTask) {
 		pthread_mutex_lock(&g_mutex4DevList);
 		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, szDevice);
 		if (pDev) {
@@ -3491,10 +3005,6 @@ void AccessService::handleAppPosition(access_service::AppPositionInfo posInfo, c
 				pDev->guardPosition.dLatitude = posInfo.dLat;
 				pDev->guardPosition.dLngitude = posInfo.dLng;
 			}
-			usBattery = (unsigned short)pDev->deviceBasic.nBattery;
-			usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
-			dLat = pDev->devicePosition.dLatitude;
-			dLng = pDev->devicePosition.dLngitude;
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 		char szBody[512] = { 0 };
@@ -3542,38 +3052,7 @@ void AccessService::handleAppPosition(access_service::AppPositionInfo posInfo, c
 			}
 			pthread_mutex_unlock(&m_mutex4LinkDataList);
 		}
-		char szDatetime[20] = { 0 };
-		format_datetime(ulTime, szDatetime, sizeof(szDatetime));
-		if (bNotifyOffline) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\battery\":0,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, posInfo.szSession,
-				access_service::E_NOTIFY_DEVICE_OFFLINE, szDevice, szDatetime);
-			sendDatatoEndpoint(szMsg, strlen(szMsg), pEndpoint);
-		}
-		if (bNotifyBattery) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\battery\":%hu,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, posInfo.szSession,
-				access_service::E_NOTIFY_DEVICE_BATTERY, szDevice, usBattery, szDatetime);
-			sendDatatoEndpoint(szMsg, strlen(szMsg), pEndpoint);
-		}
-		if (bNotifyLoose) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\battery\":%hu,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-				posInfo.szSession, access_service::E_ALARM_DEVICE_LOOSE, szDevice, usBattery,
-				(usLoose == 1) ? 0 : 1, szDatetime);
-			sendDatatoEndpoint(szMsg, strlen(szMsg), pEndpoint);
-		}
-		if (bNotifyPosition) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\"battery\":%hu,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-				posInfo.szSession, access_service::E_NOTIFY_DEVICE_POSITION, szDevice, usBattery, dLat, dLng,
-				szDatetime);
-			sendDatatoEndpoint(szMsg, sizeof(szMsg), pEndpoint);
-		}
+		//}
 	}
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report position session=%s, taskId=%s, lat=%.06f, "
 		"lng=%0.6f, datetime=%s, from=%s\r\n", __FUNCTION__, __LINE__, posInfo.szSession, posInfo.szTaskId,
@@ -3713,6 +3192,7 @@ void AccessService::handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, co
 		fleeInfo.nMode == 0 ? access_service::E_CMD_FLEE_REPLY : access_service::E_CMD_FLEE_REVOKE_REPLY,
 		nErr, fleeInfo.szSession, fleeInfo.szTaskId);
 	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint);
+	publishNotifyMessage(fleeInfo.szSession, pEndpoint, szDeviceId);
 	if (nErr == E_OK) {
 		if (bNotify) {
 			char szBody[512] = { 0 };
@@ -3733,165 +3213,66 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive keepAlive_, 
 	unsigned long ulTime_)
 {
 	char szLog[512] = { 0 };
-	int nErr = E_OK;
+	char szReply[256] = { 0 };
+	snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu}",
+		access_service::E_CMD_KEEPALIVE_REPLY, keepAlive_.szSession, keepAlive_.uiSeq);
+	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint_);
+	bool bUpdateLink = false;
+	char szGuarder[20] = { 0 };
+	bool bHaveSubscribe = false;
+	char szSubTopic[64] = { 0 };
+	char szDeviceId[20] = { 0 };
 	pthread_mutex_lock(&m_mutex4LinkList);
 	if (zhash_size(m_linkList)) {
-		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, 
+		access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
 			keepAlive_.szSession);
-		if (!pLink) {
-			nErr = E_INVALIDSESSION;
+		if (pLink) {
+			pLink->nActivated = 1;
+			pLink->ulActivateTime = ulTime_;
+			if (strcmp(pLink->szEndpoint, pEndpoint_) != 0) {
+				bUpdateLink = true;
+				strncpy_s(pLink->szEndpoint, sizeof(pLink->szEndpoint), pEndpoint_, strlen(pEndpoint_));
+				strncpy_s(szGuarder, sizeof(szGuarder), pLink->szGuarder, strlen(pLink->szGuarder));
+				if (strlen(pLink->szDeviceId) && strlen(pLink->szFactoryId) && strlen(pLink->szOrg)) {
+					snprintf(szSubTopic, sizeof(szSubTopic), "%s_%s_%s", pLink->szOrg, pLink->szFactoryId,
+						pLink->szDeviceId);
+					strncpy_s(szDeviceId, sizeof(szDeviceId), pLink->szDeviceId, strlen(pLink->szDeviceId));
+					bHaveSubscribe = true;
+				}
+			}
 		}
-	}
-	else {
-		nErr = E_INVALIDSESSION;
 	}
 	pthread_mutex_unlock(&m_mutex4LinkList);
-
-	char szReply[256] = { 0 };
-	snprintf(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d}",
-		access_service::E_CMD_KEEPALIVE_REPLY, keepAlive_.szSession, keepAlive_.uiSeq, nErr);
-	sendDatatoEndpoint(szReply, strlen(szReply), pEndpoint_);
-	if (nErr == E_OK) {
-		bool bUpdateLink = false;
-		char szGuarder[20] = { 0 };
-		bool bHaveSubscribe = false;
-		char szSubTopic[64] = { 0 };
-		char szDeviceId[20] = { 0 };
-		bool bNotifyOffline = false;
-		bool bNotifyBattery = false;
-		bool bNotifyLoose = false;
-		bool bNotifyPosition = false;
-		pthread_mutex_lock(&m_mutex4LinkList);
-		if (zhash_size(m_linkList)) {
-			access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
-				keepAlive_.szSession);
-			if (pLink) {
-				pLink->nActivated = 1;
-				pLink->ulActivateTime = ulTime_;
-				if (strcmp(pLink->szEndpoint, pEndpoint_) != 0) {
-					bUpdateLink = true;
-					strncpy_s(pLink->szEndpoint, sizeof(pLink->szEndpoint), pEndpoint_, strlen(pEndpoint_));
-					strncpy_s(szGuarder, sizeof(szGuarder), pLink->szGuarder, strlen(pLink->szGuarder));
-					if (strlen(pLink->szDeviceId) && strlen(pLink->szFactoryId) && strlen(pLink->szOrg)) {
-						snprintf(szSubTopic, sizeof(szSubTopic), "%s_%s_%s", pLink->szOrg, pLink->szFactoryId,
-							pLink->szDeviceId);
-						strncpy_s(szDeviceId, sizeof(szDeviceId), pLink->szDeviceId, strlen(pLink->szDeviceId));
-						bHaveSubscribe = true;
-					}
-				}
-				if (pLink->nNotifyOnline) {
-					pLink->nNotifyOnline = 0;
-					pLink->nNotifyBattery = 0;
-					bNotifyOffline = true;
-					bNotifyBattery = false;
-				}
-				else {
-					if (pLink->nNotifyBattery) {
-						pLink->nNotifyBattery = 0;
-						pLink->nNotifyOnline = 0;
-						bNotifyOffline = false;
-						bNotifyBattery = true;
-					}
-				}
-				if (pLink->nNotifyPosition) {
-					pLink->nNotifyPosition = 0;
-					bNotifyPosition = true;
-				}
-				if (pLink->nNotifyStatus) {
-					pLink->nNotifyStatus = 0;
-					bNotifyLoose = true;
-				}
+	if (bUpdateLink && strlen(szGuarder)) {
+		pthread_mutex_lock(&g_mutex4GuarderList);
+		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
+		if (pGuarder) {
+			if (strcmp(pGuarder->szLink, pEndpoint_) != 0) {
+				strncpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndpoint_, strlen(pEndpoint_));
 			}
 		}
-		pthread_mutex_unlock(&m_mutex4LinkList);
-		if (bUpdateLink && strlen(szGuarder)) {
-			pthread_mutex_lock(&g_mutex4GuarderList);
-			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
-			if (pGuarder) {
-				if (strcmp(pGuarder->szLink, pEndpoint_) != 0) {
-					strncpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndpoint_, strlen(pEndpoint_));
+		pthread_mutex_unlock(&g_mutex4GuarderList);
+	}
+	if (bHaveSubscribe) {
+		publishNotifyMessage(keepAlive_.szSession, pEndpoint_, szDeviceId);
+		if (strlen(szSubTopic)) {
+			pthread_mutex_lock(&m_mutex4SubscribeList);
+			access_service::AppSubscirbeInfo * pSubInfo = (access_service::AppSubscirbeInfo *)zhash_lookup(
+				m_subscribeList, szSubTopic);
+			if (pSubInfo) {
+				if (strcmp(pSubInfo->szEndpoint, pEndpoint_) != 0) {
+					strncpy_s(pSubInfo->szEndpoint, sizeof(pSubInfo->szEndpoint), pEndpoint_, strlen(pEndpoint_));
+					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]update subscriber=%s, endpoint=%s\r\n",
+						__FUNCTION__, __LINE__, szSubTopic, pEndpoint_);
+					writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 				}
 			}
-			pthread_mutex_unlock(&g_mutex4GuarderList);
-		}
-		pthread_mutex_lock(&m_mutex4LinkDataList);
-		std::string strLink = pEndpoint_;
-		std::map<std::string, access_service::LinkDataInfo *>::iterator iter = m_linkDataList.find(strLink);
-		if (iter != m_linkDataList.end()) {
-			access_service::LinkDataInfo * pLinkData = iter->second;
-			if (pLinkData) {
-				strncpy_s(pLinkData->szUser, sizeof(pLinkData->szUser), szGuarder, strlen(szGuarder));
-			}
-		}
-		pthread_mutex_unlock(&m_mutex4LinkDataList);
-		if (bHaveSubscribe) {
-			if (strlen(szSubTopic)) {
-				pthread_mutex_lock(&m_mutex4SubscribeList);
-				access_service::AppSubscirbeInfo * pSubInfo = (access_service::AppSubscirbeInfo *)zhash_lookup(
-					m_subscribeList, szSubTopic);
-				if (pSubInfo) {
-					if (strcmp(pSubInfo->szEndpoint, pEndpoint_) != 0) {
-						strncpy_s(pSubInfo->szEndpoint, sizeof(pSubInfo->szEndpoint), pEndpoint_, strlen(pEndpoint_));
-						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]update subscriber=%s, endpoint=%s\r\n",
-							__FUNCTION__, __LINE__, szSubTopic, pEndpoint_);
-						writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-					}
-				}
-				pthread_mutex_unlock(&m_mutex4SubscribeList);
-			}
-		}
-		unsigned short usBattery = 0;
-		unsigned short usLoose = 0;
-		double dLat = 0.00, dLng = 0.00;
-		if (strlen(szDeviceId)) {
-			pthread_mutex_lock(&g_mutex4DevList);
-			if (zhash_size(g_deviceList)) {
-				WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
-				if (pDev) {
-					usBattery = (unsigned short)pDev->deviceBasic.nBattery;
-					usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
-					dLat = pDev->devicePosition.dLatitude;
-					dLng = pDev->devicePosition.dLngitude;
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4DevList);
-		}
-		char szDatetime[20] = { 0 };
-		format_datetime(ulTime_, szDatetime, sizeof(szDatetime));
-		if (bNotifyOffline) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\battery\":0,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, keepAlive_.szSession,
-				access_service::E_NOTIFY_DEVICE_OFFLINE, szDeviceId, szDatetime);
-			sendDatatoEndpoint(szMsg, strlen(szMsg), pEndpoint_);
-		}
-		if (bNotifyBattery) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\battery\":%hu,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, keepAlive_.szSession,
-				access_service::E_NOTIFY_DEVICE_BATTERY, szDeviceId, usBattery, szDatetime);
-			sendDatatoEndpoint(szMsg, strlen(szMsg), pEndpoint_);
-		}
-		if (bNotifyLoose) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\battery\":%hu,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-				keepAlive_.szSession, access_service::E_ALARM_DEVICE_LOOSE, szDeviceId, usBattery,
-				(usLoose == 1) ? 0 : 1, szDatetime);
-			sendDatatoEndpoint(szMsg, strlen(szMsg), pEndpoint_);
-		}
-		if (bNotifyPosition) {
-			char szMsg[256] = { 0 };
-			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-				"\"battery\":%hu,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-				keepAlive_.szSession, access_service::E_NOTIFY_DEVICE_POSITION, szDeviceId, usBattery, dLat, dLng,
-				szDatetime);
-			sendDatatoEndpoint(szMsg, sizeof(szMsg), pEndpoint_);
+			pthread_mutex_unlock(&m_mutex4SubscribeList);
 		}
 	}
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report keep alive, from=%s, session=%s, seq=%u,"
-		" datetime=%s, retcode=%d\r\n", __FUNCTION__, __LINE__, pEndpoint_, keepAlive_.szSession, keepAlive_.uiSeq,
-		keepAlive_.szDatetime, nErr);
+		" datetime=%s\r\n", __FUNCTION__, __LINE__, pEndpoint_, keepAlive_.szSession, keepAlive_.uiSeq,
+		keepAlive_.szDatetime);
 	writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 }
 
@@ -4003,7 +3384,7 @@ void AccessService::handleAppModifyAccountPassword(access_service::AppModifyPass
 				}
 			}
 			pthread_mutex_unlock(&m_mutex4SubscribeList);
-			//publishNotifyMessage(modifyPasswd_.szSession, pEndpoint_, szDeviceId);
+			publishNotifyMessage(modifyPasswd_.szSession, pEndpoint_, szDeviceId);
 		}
 	}
 	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]report modify password from %s, session=%s,"
@@ -4109,7 +3490,7 @@ void AccessService::handleAppQueryTask(access_service::AppQueryTask queryTask_,
 					}
 				}
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
-				//publishNotifyMessage(queryTask_.szSession, pEndpoint_, szDeviceId);
+				publishNotifyMessage(queryTask_.szSession, pEndpoint_, szDeviceId);
 			}
 		}
 	}
@@ -4260,7 +3641,7 @@ void AccessService::dealTopicMsg()
 		if (pMsg) { //M_S->A_S
 			bool bNeedStore = false;
 			switch (pMsg->usMsgType) {
-				case PUBMSG_DEVICE_ALIVE: {
+				case MSG_DEVICE_ALIVE: {
 					//parse pMsg->szMsgBody,
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
@@ -4316,7 +3697,7 @@ void AccessService::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_LOCATE: {
+				case MSG_DEVICE_LOCATE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nSubType = -1;
@@ -4366,9 +3747,9 @@ void AccessService::dealTopicMsg()
 										gpsLocateMsg.dLat = doc["latitude"].GetDouble();
 									}
 								}
-								if (doc.HasMember("lngitude")) {
+								if (doc.HasMember("lngtitude")) {
 									if (doc["lngitude"].IsDouble()) {
-										gpsLocateMsg.dLng = doc["lngitude"].GetDouble();
+										gpsLocateMsg.dLng = doc["latitude"].GetDouble();
 									}
 								}
 								if (doc.HasMember("latType")) {
@@ -4461,9 +3842,9 @@ void AccessService::dealTopicMsg()
 										lbsLocateMsg.dLat = doc["latitude"].GetDouble();
 									}
 								}
-								if (doc.HasMember("lngitude")) {
+								if (doc.HasMember("lngtitude")) {
 									if (doc["lngitude"].IsDouble()) {
-										lbsLocateMsg.dLng = doc["lngitude"].GetDouble();
+										lbsLocateMsg.dLng = doc["latitude"].GetDouble();
 									}
 								}
 								if (doc.HasMember("latType")) {
@@ -4517,7 +3898,7 @@ void AccessService::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_ALARM: {
+				case MSG_DEVICE_ALARM: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nSubType = -1;
@@ -4658,10 +4039,10 @@ void AccessService::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_BIND: { //ignore
+				case MSG_DEVICE_BIND: { //ignore
 					break;
 				}
-				case PUBMSG_DEVICE_ONLINE: {
+				case MSG_DEVICE_ONLINE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						TopicOnlineMessage onlineMsg;
@@ -4721,7 +4102,7 @@ void AccessService::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_OFFLINE: {
+				case MSG_DEVICE_OFFLINE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						TopicOfflineMessage offlineMsg;
@@ -4775,10 +4156,10 @@ void AccessService::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_TASK: { //ignore
+				case MSG_TASK: { //ignore
 					break;
 				}
-				case PUBMSG_BUFFER_MODIFY: {
+				case MSG_BUFFER_MODIFY: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nObject = 0;
@@ -4846,7 +4227,6 @@ void AccessService::dealTopicMsg()
 								else {
 									bool bValidName = false;
 									bool bValidPasswd = false;
-									bool bValidRoleType = false;
 									if (doc.HasMember("name")) {
 										if (doc["name"].IsString()) {
 											size_t nSize = doc["name"].GetStringLength();
@@ -4867,22 +4247,15 @@ void AccessService::dealTopicMsg()
 											}
 										}
 									}
-									if (doc.HasMember("roleType")) {
-										if (doc["roleType"].IsInt()) {
-											guarder.usRoleType = (unsigned short)doc["roleType"].GetInt();
-											bValidRoleType = true;
-										}
-									}
-									if (bValidGuarder && bValidOrg && bValidDateTime && bValidName && bValidPasswd && bValidRoleType) {
+									if (bValidGuarder && bValidOrg && bValidDateTime && bValidName && bValidPasswd) {
 										if (nOperate == BUFFER_OPERATE_NEW) {
 											pthread_mutex_lock(&g_mutex4GuarderList);
 											Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, guarder.szId);
 											if (pGuarder) {
 												snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]Topic Buffer Modify message, "
-													"object=%u, operate=%u, guarder=%s, name=%s, passwd=%s, orgId=%s, roleType=%hu already"
-													" exists in the guarderList\r\n", __FUNCTION__, __LINE__, BUFFER_GUARDER, 
-													BUFFER_OPERATE_NEW, guarder.szId, guarder.szTagName, guarder.szPassword, guarder.szOrg, 
-													guarder.usRoleType);
+													"object=%u, operate=%u, guarder=%s, name=%s, passwd=%s, orgId=%s, already exists"
+													" in the guarderList\r\n", __FUNCTION__, __LINE__, BUFFER_GUARDER, BUFFER_OPERATE_NEW,
+													guarder.szId, guarder.szTagName, guarder.szPassword, guarder.szOrg);
 												writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 											}
 											else {
@@ -4902,13 +4275,12 @@ void AccessService::dealTopicMsg()
 												pGuarder->szCurrentSession[0] = '\0';
 												pGuarder->szTaskStartTime[0] = '\0';
 												pGuarder->usState = STATE_GUARDER_FREE;
-												pGuarder->usRoleType = guarder.usRoleType;
 												zhash_update(g_guarderList, pGuarder->szId, pGuarder);
 												zhash_freefn(g_guarderList, pGuarder->szId, free);
 												snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]Topic Buffer Modify message"
-													", object=%u, operate=%u, guarder=%s, name=%s, passwd=%s, orgId=%s, roleType=%hu\r\n",
+													", object=%u, operate=%u, guarder=%s, name=%s, passwd=%s, orgId=%s\r\n",
 													__FUNCTION__, __LINE__, BUFFER_GUARDER, BUFFER_OPERATE_NEW, guarder.szId, 
-													guarder.szTagName, guarder.szPassword, guarder.szOrg, guarder.usRoleType);
+													guarder.szTagName, guarder.szPassword, guarder.szOrg);
 												writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 											}
 											pthread_mutex_unlock(&g_mutex4GuarderList);
@@ -4929,13 +4301,10 @@ void AccessService::dealTopicMsg()
 													strncpy_s(pGuarder->szOrg, sizeof(pGuarder->szOrg), guarder.szOrg, 
 														strlen(guarder.szOrg));
 												}
-												if (pGuarder->usRoleType != guarder.usRoleType) {
-													pGuarder->usRoleType = guarder.usRoleType;
-												}
 												snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]Topic Buffer Modify message"
-													", object=%u, operate=%u, guarder=%s, name=%s, passwd=%s, orgId=%s, roleType=%hu\r\n",
+													", object=%u, operate=%u, guarder=%s, name=%s, passwd=%s, orgId=%s\r\n",
 													__FUNCTION__, __LINE__, BUFFER_GUARDER, BUFFER_OPERATE_UPDATE, guarder.szId,
-													guarder.szTagName, guarder.szPassword, guarder.szOrg, guarder.usRoleType);
+													guarder.szTagName, guarder.szPassword, guarder.szOrg);
 												writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 											}
 											else {
@@ -5132,12 +4501,6 @@ void AccessService::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_ACCOUNT_LOGIN: {
-					break;
-				}
-				case PUBMSG_ACCOUNT_LOGOUT: {
-					break;
-				}
 			}
 			if (bNeedStore && m_nRun) {
 				storeTopicMsg(pMsg);
@@ -5291,8 +4654,8 @@ void AccessService::dealInteractionMsg()
 													}
 												}
 												if (doc["msg"][0].HasMember("msgUuid")) {
-													if (doc["msg"][0]["msgUuid"].IsString()) {
-														size_t nSize = doc["msg"][0]["msgUuid"].GetStringLength();
+													if (doc["msg"][0]["msgType"].IsString()) {
+														size_t nSize = doc["msg"][0]["msgMark"].GetStringLength();
 														if (nSize) {
 															strncpy_s(topicMsg.szMsgUuid, sizeof(topicMsg.szMsgUuid),
 																doc["msg"][0]["msgUuid"].GetString(), nSize);
@@ -5301,15 +4664,14 @@ void AccessService::dealInteractionMsg()
 													}
 												}
 												if (doc["msg"][0].HasMember("msgBody")) {
-													//if (doc["msg"][0]["msgBody"].IsString()) {
-													//	size_t nSize = doc["msg"][0]["msgBody"].GetStringLength();
-													//	if (nSize) {
-													//		strncpy_s(topicMsg.szMsgBody, sizeof(topicMsg.szMsgBody),
-													//			doc["msg"][0]["msgBody"].GetString(), nSize);
-													//		bValidMsg = true;
-													//	}
-													//}
-
+													if (doc["msg"][0]["msgBody"].IsString()) {
+														size_t nSize = doc["msg"][0]["msgBody"].GetStringLength();
+														if (nSize) {
+															strncpy_s(topicMsg.szMsgBody, sizeof(topicMsg.szMsgBody),
+																doc["msg"][0]["msgBody"].GetString(), nSize);
+															bValidMsg = true;
+														}
+													}
 												}
 												if (bValidMsg && bValidUuid) {
 													storeTopicMsg(&topicMsg);
@@ -5377,9 +4739,8 @@ int AccessService::handleTopicOnlineMsg(TopicOnlineMessage * pMsg, const char * 
 	int result = E_DEFAULTERROR;
 	char szLog[512] = { 0 };
 	if (pMsg) {
+		bool bValidMsg = false;
 		unsigned short usBattery = 0;
-		unsigned short usLoose = 0;
-		double dLat = 0.00, dLng = 0.00;
 		if (strlen(pMsg->szDeviceId) > 0) {
 			char szGuarder[20] = { 0 };
 			pthread_mutex_lock(&g_mutex4DevList);
@@ -5399,9 +4760,7 @@ int AccessService::handleTopicOnlineMsg(TopicOnlineMessage * pMsg, const char * 
 						if (strlen(pDev->szBindGuard)) {
 							strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
 						}
-						dLat = pDev->devicePosition.dLatitude;
-						dLng = pDev->devicePosition.dLngitude;
-						usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
+						bValidMsg = true;
 						result = E_OK;
 					}
 				}
@@ -5446,7 +4805,7 @@ int AccessService::handleTopicOnlineMsg(TopicOnlineMessage * pMsg, const char * 
 				pthread_mutex_unlock(&g_mutex4DevList);
 			}
 		}
-		if (pMsgSubstitle && strlen(pMsgSubstitle) > 0) {
+		if (bValidMsg && pMsgSubstitle && strlen(pMsgSubstitle) > 0) {
 			char szDatetime[16] = { 0 };
 			format_datetime(pMsg->ulMessageTime, szDatetime, sizeof(szDatetime));
 			bool bFindSub = false;
@@ -5469,58 +4828,48 @@ int AccessService::handleTopicOnlineMsg(TopicOnlineMessage * pMsg, const char * 
 					"\"battery\":%u,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
 					access_service::E_NOTIFY_DEVICE_ONLINE, pMsg->szDeviceId, usBattery, szDatetime);
 				if (strlen(szMsg)) {
-					bool bNeedNotify = true;
 					if (strlen(szEndpoint)) {
 						if (sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint) == 0) { 
 							snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, device=%s,"
 								" battery=%u, datetime=%s, notify device online\r\n", __FUNCTION__, __LINE__, szEndpoint, 
 								szSession, pMsg->szDeviceId, usBattery, szDatetime);
 							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-							bNeedNotify = false;
+						}
+						else {
+							access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+							pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_ONLINE;
+							strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+							strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+							strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+							pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+							if (!addLingerNotifyMessage(pLingerMsg)) {
+								delete pLingerMsg;
+								pLingerMsg = NULL;
+							}
+							else {
+								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send endpoint=%s failed, device=%s, "
+									"session=%s, datetime=%s, add device online message into linger message\r\n", __FUNCTION__, 
+									__LINE__, szEndpoint, pMsg->szDeviceId, szSession, szDatetime);
+								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+							}
 						}
 					}
-					if (strlen(szSession)) {
-						bool bNotifyPosition = false;
-						bool bNotifyStatus = false;
-						pthread_mutex_lock(&m_mutex4LinkList);
-						if (zhash_size(m_linkList)) {
-							access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, szSession);
-							if (pLink) {
-								if (bNeedNotify) {
-									pLink->nNotifyBattery = 1;
-								}
-								else {
-									pLink->nNotifyOnline = 0;
-									pLink->nNotifyBattery = 0;
-									if (pLink->nNotifyPosition) {
-										pLink->nNotifyPosition = 0;
-										bNotifyPosition = true;
-									}
-									if (pLink->nNotifyStatus) {
-										pLink->nNotifyStatus = 0;
-										bNotifyStatus = true;
-									}
-								}
-							}
+					else {
+						access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+						pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_ONLINE;
+						strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+						strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+						strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+						pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+						if (!addLingerNotifyMessage(pLingerMsg)) {
+							delete pLingerMsg;
+							pLingerMsg = NULL;
 						}
-						pthread_mutex_unlock(&m_mutex4LinkList);
-						if (bNotifyPosition) {
-							if (dLat > 0.0 && dLng > 0.0) {
-								char szMsg[256] = { 0 };
-								sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
-									",\"battery\":%hu,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-									szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, usBattery, dLat, dLng,
-									szDatetime);
-								sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-							}
-						}
-						if (bNotifyStatus) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
-								",\"mode\":%d,\"battery\":%hu,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
-								access_service::E_ALARM_DEVICE_LOOSE, pMsg->szDeviceId, (usLoose == 1) ? 0 : 1, usBattery,
-								szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+						else {
+							snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send endpoint is empty, device=%s, "
+								"session=%s, datetime=%s, add device online message into linger message\r\n", __FUNCTION__,
+								__LINE__,  pMsg->szDeviceId, szSession, szDatetime);
+							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 						}
 					}
 				}
@@ -5536,14 +4885,11 @@ int AccessService::handleTopicOfflineMsg(TopicOfflineMessage * pMsg, const char 
 	if (pMsg) {
 		if (pMsg->szDeviceId) {
 			bool bValidMsg = false;
-			double dLat = 0.00, dLng = 0.00;
 			pthread_mutex_lock(&g_mutex4DevList);
 			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pMsg->szDeviceId);
 			if (pDev) {
 				if (pDev->deviceBasic.nStatus != DEV_OFFLINE) {
 					changeDeviceStatus(DEV_OFFLINE, pDev->deviceBasic.nStatus);
-					dLat = pDev->devicePosition.dLatitude;
-					dLng = pDev->devicePosition.dLngitude;
 					pDev->deviceBasic.ulLastActiveTime = pMsg->ulMessageTime;
 					pDev->deviceBasic.nBattery = 0;
 					bValidMsg = true;
@@ -5574,47 +4920,37 @@ int AccessService::handleTopicOfflineMsg(TopicOfflineMessage * pMsg, const char 
 						",\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
 						access_service::E_NOTIFY_DEVICE_OFFLINE, pMsg->szDeviceId, szDatetime);
 					if (strlen(szMsg)) {
-						bool bNotify = true;
 						if (strlen(szEndpoint)) {
 							if (sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint) == 0) {
 								char szLog[512] = { 0 };
-								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, "
-									"deviceId=%s, datetime=%s, notify device offline\r\n", __FUNCTION__, __LINE__, szEndpoint,
-									szSession, pMsg->szDeviceId, szDatetime);
+								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, deviceId=%s,"
+									" datetime=%s, notify device offline\r\n", __FUNCTION__, __LINE__, szEndpoint, szSession,
+									pMsg->szDeviceId, szDatetime);
 								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-								bNotify = false;
+							}
+							else {
+								access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+								pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_OFFLINE;
+								pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+								strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+								strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+								strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+								if (!addLingerNotifyMessage(pLingerMsg)) {
+									delete pLingerMsg;
+									pLingerMsg = NULL;
+								}
 							}
 						}
-						if (strlen(szSession)) {
-							bool bNotifyPosition = false;
-							pthread_mutex_lock(&m_mutex4LinkList);
-							if (zhash_size(m_linkList)) {
-								access_service::AppLinkInfo * pLinkInfo = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
-									szSession);
-								if (pLinkInfo) {
-									if (bNotify) {
-										pLinkInfo->nNotifyOnline = 1;
-									}
-									else {
-										pLinkInfo->nNotifyBattery = 0;
-										pLinkInfo->nNotifyStatus = 0;
-										if (pLinkInfo->nNotifyPosition) {
-											pLinkInfo->nNotifyPosition = 0;
-											bNotifyPosition = true;
-										}
-									}
-								}
-							}
-							pthread_mutex_unlock(&m_mutex4LinkList);
-							if (bNotifyPosition) {
-								if (dLat > 0.00 && dLng > 0.00) {
-									char szMsg[256] = { 0 };
-									sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\""
-										":\"%s\",\"battery\":0,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}",
-										access_service::E_CMD_MSG_NOTIFY, szSession, access_service::E_NOTIFY_DEVICE_OFFLINE,
-										pMsg->szDeviceId, dLat, dLng, szDatetime);
-									sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-								}
+						else {
+							access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+							pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_OFFLINE;
+							pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+							strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+							strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+							strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+							if (!addLingerNotifyMessage(pLingerMsg)) {
+								delete pLingerMsg;
+								pLingerMsg = NULL;
 							}
 						}
 					}
@@ -5632,8 +4968,6 @@ int AccessService::handleTopicAliveMsg(TopicAliveMessage * pMsg, const char * pM
 	if (pMsg) {
 		bool bValidMsg = false;
 		unsigned short usBattery = 0;
-		unsigned short usLoose = 0;
-		double dLat = 0.00, dLng = 0.00;
 		if (strlen(pMsg->szDeviceId) > 0) {
 			pthread_mutex_lock(&g_mutex4DevList);
 			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pMsg->szDeviceId);
@@ -5643,20 +4977,8 @@ int AccessService::handleTopicAliveMsg(TopicAliveMessage * pMsg, const char * pM
 					if (pMsg->usBattery > 0) {
 						pDev->deviceBasic.nBattery = (unsigned char)pMsg->usBattery;
 					}
-					usBattery = (unsigned short)pDev->deviceBasic.nBattery;
-					usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
+					usBattery = pDev->deviceBasic.nBattery;
 					bValidMsg = true;
-					if (pDev->deviceBasic.nStatus == DEV_OFFLINE) {
-						changeDeviceStatus(DEV_ONLINE, pDev->deviceBasic.nStatus);
-						if (usBattery < BATTERY_THRESHOLD) {
-							changeDeviceStatus(DEV_LOWPOWER, pDev->deviceBasic.nStatus, 0);
-						}
-						if (pDev->deviceBasic.nLooseStatus == 1) {
-							changeDeviceStatus(DEV_LOOSE, pDev->deviceBasic.nStatus, 0);
-						}
-					}
-					dLat = pDev->devicePosition.dLatitude;
-					dLng = pDev->devicePosition.dLngitude;
 					result = E_OK;
 				}
 			}
@@ -5682,66 +5004,42 @@ int AccessService::handleTopicAliveMsg(TopicAliveMessage * pMsg, const char * pM
 			}
 			pthread_mutex_unlock(&m_mutex4SubscribeList);
 			if (bFindSub) {
-				bool bSend = false;
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\""
 					":\"%s\",\"battery\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
 					access_service::E_NOTIFY_DEVICE_BATTERY, pMsg->szDeviceId, usBattery, szDatetime);
 				if (strlen(szMsg)) {
 					if (strlen(szEndpoint)) {
+						publishNotifyMessage(szSession, szEndpoint, pMsg->szDeviceId);
 						if (sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint) == 0) {
 							snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to Endpoint=%s, session=%s, device=%s,"
 								" battery=%d, datetime=%s, notify device battery\r\n", __FUNCTION__, __LINE__, szEndpoint,
 								szSession, pMsg->szDeviceId, usBattery, szDatetime);
 							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-							bSend = true;
 						}
+						//else {
+						//	access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+						//	pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_BATTERY;
+						//	pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+						//	strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+						//	strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+						//	if (!addLingerNotifyMessage(pLingerMsg)) {
+						//		delete pLingerMsg;
+						//		pLingerMsg = NULL;
+						//	}
+						//}
 					}
-				}
-				if (strlen(szSession)) {
-					bool bNotifyStatus = false;
-					bool bNotifyPosition = false;
-					pthread_mutex_lock(&m_mutex4LinkList);
-					if (zhash_size(m_linkList)) {
-						access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, 
-							szSession);
-						if (pLink) {
-							if (!bSend) {
-								pLink->nNotifyBattery = 1;
-							}
-							else {
-								pLink->nNotifyBattery = 0;
-								pLink->nNotifyOnline = 0;
-								if (pLink->nNotifyStatus) {
-									pLink->nNotifyStatus = 0;
-									bNotifyStatus = true;
-								}
-								if (pLink->nNotifyPosition) {
-									pLink->nNotifyPosition = 0;
-									bNotifyPosition = true;
-								}
-							}
-						}
-					}
-					pthread_mutex_unlock(&m_mutex4LinkList);
-					if (bNotifyStatus) {
-						char szMsg[256] = { 0 };
-						sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-							"\"battery\":%hu,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
-							access_service::E_ALARM_DEVICE_LOOSE, pMsg->szDeviceId, usBattery, (usLoose == 1) ? 0 : 1, 
-							szDatetime);
-						sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-					}
-					if (bNotifyPosition) {
-						if (dLat > 0.00 && dLng > 0.00) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-								"\"battery\":%hu,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-								szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, usBattery, dLat, dLng,
-								szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-						}
-					}
+					//else {
+					//	access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+					//	pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_BATTERY;
+					//	pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+					//	strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+					//	strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+					//	if (!addLingerNotifyMessage(pLingerMsg)) {
+					//		delete pLingerMsg;
+					//		pLingerMsg = NULL;
+					//	}
+					//}
 				}
 			}
 		}
@@ -5757,7 +5055,6 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 		if (strlen(pMsg->szDeviceId)) {
 			bool bValidMsg = false;
 			unsigned short usBattery = 0;
-			unsigned short usLoose = 0;
 			pthread_mutex_lock(&g_mutex4DevList);
 			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pMsg->szDeviceId);
 			if (pDev) {
@@ -5766,8 +5063,7 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 					if (pDev->deviceBasic.nStatus == DEV_OFFLINE) {
 						changeDeviceStatus(DEV_ONLINE, pDev->deviceBasic.nStatus);
 					}
-					if ((pDev->deviceBasic.nStatus & DEV_GUARD) || 
-						(pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE) {
+					if ((pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE) {
 						bValidMsg = true;
 					}
 					pDev->devicePosition.dLatitude = pMsg->dLat;
@@ -5777,14 +5073,13 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 					if (pMsg->usBattery > 0) {
 						pDev->deviceBasic.nBattery = (unsigned char)pMsg->usBattery;
 					}
-					usBattery = (unsigned short)pDev->deviceBasic.nBattery;
-					usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
+					usBattery = pDev->deviceBasic.nBattery;
 					result = E_OK;
 				}
 			}
 			pthread_mutex_unlock(&g_mutex4DevList);
 			if (bValidMsg && pMsgSubstitle && strlen(pMsgSubstitle)) {
-				char szDatetime[20] = { 0 };
+				char szDatetime[16] = { 0 };
 				format_datetime(pMsg->ulMessageTime, szDatetime, sizeof(szDatetime));
 				char szSession[20] = { 0 };
 				char szEndpoint[40] = { 0 };
@@ -5801,7 +5096,6 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 				}
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
 				if (bNotifyMsg) {
-					bool bSend = false;
 					char szMsg[256] = { 0 };
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
 						",\"battery\":%u,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
@@ -5815,39 +5109,43 @@ int AccessService::handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const c
 									__FUNCTION__, __LINE__, szEndpoint, szSession, pMsg->szDeviceId, usBattery, pMsg->dLat, 
 									pMsg->dLng, szDatetime);
 								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-								bSend = true;
 							}
-						}
-					}
-					if (strlen(szSession)) {
-						bool bNotifyStatus = false;
-						pthread_mutex_lock(&m_mutex4LinkList);
-						if (zhash_size(m_linkList)) {
-							access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
-								szSession);
-							if (pLink) {
-								if (!bSend) {
-									pLink->nNotifyPosition = 1;
+							else {
+								access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+								pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_POSITION;
+								pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+								strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+								strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+								strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+								if (!addLingerNotifyMessage(pLingerMsg)) {
+									delete pLingerMsg;
+									pLingerMsg = NULL;
 								}
 								else {
-									pLink->nNotifyPosition = 0;
-									pLink->nNotifyOnline = 0;
-									pLink->nNotifyBattery = 0;
-									if (pLink->nNotifyStatus) {
-										pLink->nNotifyStatus = 0;
-										bNotifyStatus = true;
-									}
+									snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send endpoint=%s failed, device=%s, "
+										"session=%s, datetime=%s, add device position message into linger message\r\n", __FUNCTION__,
+										__LINE__, szEndpoint, pMsg->szDeviceId, szSession, szDatetime);
+									writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 								}
 							}
 						}
-						pthread_mutex_unlock(&m_mutex4LinkList);
-						if (bNotifyStatus) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
-								",\"battery\":%hu,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-								szSession, access_service::E_ALARM_DEVICE_LOOSE, pMsg->szDeviceId, usBattery,
-								(usLoose == 1) ? 0 : 1, szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+						else {
+							access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+							pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_POSITION;
+							pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+							strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+							strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+							strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+							if (!addLingerNotifyMessage(pLingerMsg)) {
+								delete pLingerMsg;
+								pLingerMsg = NULL;
+							}
+							else {
+								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send endpoint is empty, device=%s, "
+									"session=%s, datetime=%s, add device position message into linger message\r\n", __FUNCTION__,
+									__LINE__, pMsg->szDeviceId, szSession, szDatetime);
+								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+							}
 						}
 					}
 				}
@@ -5861,10 +5159,9 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 {
 	int result = E_DEFAULTERROR;
 	char szLog[512] = { 0 };
-	if (pMsg && pMsg->usFlag == 1 && pMsg->dLat > 0 && pMsg->dLng > 0) {
+	if (pMsg && pMsg->usFlag == 1 && pMsg->dLat > 0 && pMsg->dLng) {
 		if (strlen(pMsg->szDeviceId) > 0) {
 			unsigned short usBattery = 0;
-			unsigned short usLoose = 0;
 			bool bValidMsg = false;
 			pthread_mutex_lock(&g_mutex4DevList);
 			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pMsg->szDeviceId);
@@ -5874,29 +5171,27 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 					if (pDev->deviceBasic.nStatus == DEV_OFFLINE) {
 						changeDeviceStatus(DEV_ONLINE, pDev->deviceBasic.nStatus);
 					}
-					if ((pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD || 
-						(pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE) {
-						bValidMsg = true;
+					if ((pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE) {
+						//bValidMsg = true;
 					}
 					//this code would open if LBS position is correct 
-					pDev->devicePosition.dLatitude = pMsg->dLat;
-					pDev->devicePosition.dLngitude = pMsg->dLng;
-					pDev->devicePosition.usLatType = pMsg->usLatType;
-					pDev->devicePosition.usLngType = pMsg->usLngType;
-					pDev->devicePosition.nPrecision = pMsg->nPrecision;
+					//pDev->devicePosition.dLatitude = pMsg->dLat;
+					//pDev->devicePosition.dLngitude = pMsg->dLng;
+					//pDev->devicePosition.usLatType = pMsg->usLatType;
+					//pDev->devicePosition.usLngType = pMsg->usLngType;
+					//pDev->devicePosition.nPrecision = pMsg->nPrecision;
 					if (pMsg->usBattery > 0) {
 						pDev->deviceBasic.nBattery = (unsigned char)pMsg->usBattery;
 					}
-					usBattery = (unsigned short)pDev->deviceBasic.nBattery;
-					usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
+					usBattery = pDev->deviceBasic.nBattery;
 					result = E_OK;
 				}
 			}
 			pthread_mutex_unlock(&g_mutex4DevList);
 			if (bValidMsg && pMsgSubstitle && strlen(pMsgSubstitle)) {
 				char szSession[20] = { 0 };
-				char szEndpoint[40] = { 0 };
-				char szDatetime[20] = { 0 };
+				char szEndpoint[20] = { 0 };
+				char szDatetime[16] = { 0 };
 				format_datetime(pMsg->ulMessageTime, szDatetime, sizeof(szDatetime));
 				bool bNotifyMsg = false;
 				pthread_mutex_lock(&m_mutex4SubscribeList);
@@ -5911,10 +5206,9 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 				}
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
 				if (bNotifyMsg) {
-					bool bSend = false;
-					char szMsg[512] = { 0 };
+					char szMsg[256] = { 0 };
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
-						",\"battery\":%u,\"lat\":%.06f,\"lng\":%.06f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
+						",\"battery\":%u,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
 						szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, usBattery,
 						pMsg->dLat, pMsg->dLng, szDatetime);
 					if (strlen(szEndpoint) > 0) {
@@ -5924,61 +5218,30 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 								__LINE__, szEndpoint, szSession, pMsg->szDeviceId, usBattery, pMsg->dLat, pMsg->dLng,
 								szDatetime);
 							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-							printf(szLog);
-							bSend = true;
 						}
-					}
-					if (strlen(szSession)) {
-						bool bNotifyBattery = false;
-						bool bNotifyStatus = false;
-						bool bNotifyOffline = false;
-						pthread_mutex_lock(&m_mutex4LinkList);
-						if (zhash_size(m_linkList)) {
-							access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
-								szSession);
-							if (pLink) {
-								if (!bSend) {
-									pLink->nNotifyPosition = 1;
-								}
-								else {
-									pLink->nNotifyPosition = 0;
-									if (pLink->nNotifyOnline) {
-										pLink->nNotifyOnline = 0;
-										bNotifyOffline = true;
-									}
-									if (pLink->nNotifyBattery) {
-										pLink->nNotifyBattery = 0;
-										bNotifyBattery = true;
-									}
-									if (pLink->nNotifyStatus) {
-										pLink->nNotifyStatus = 0;
-										bNotifyStatus = true;
-									}
-								}
+						else {
+							access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+							pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_POSITION;
+							pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+							strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+							strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+							strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+							if (!addLingerNotifyMessage(pLingerMsg)) {
+								delete pLingerMsg;
+								pLingerMsg = NULL;
 							}
 						}
-						pthread_mutex_unlock(&m_mutex4LinkList);
-						if (bNotifyOffline) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":"
-								"\"%s\",\"battery\":0,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
-								access_service::E_NOTIFY_DEVICE_OFFLINE, pMsg->szDeviceId, szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-						}
-						if (bNotifyBattery) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":"
-								"\"%s\",\"battery\":%hu,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
-								access_service::E_NOTIFY_DEVICE_BATTERY, pMsg->szDeviceId, usBattery, szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-						}
-						if (bNotifyStatus) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":"
-								"\"%s\",\"battery\":%hu,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-								szSession, access_service::E_ALARM_DEVICE_LOOSE, pMsg->szDeviceId, usBattery,
-								(usLoose == 1) ? 0 : 1, szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+					}
+					else {
+						access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+						pLingerMsg->nMessageType = access_service::E_NOTIFY_DEVICE_POSITION;
+						pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+						strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+						strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+						strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+						if (!addLingerNotifyMessage(pLingerMsg)) {
+							delete pLingerMsg;
+							pLingerMsg = NULL;
 						}
 					}
 				}
@@ -5996,8 +5259,6 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 		if (strlen(pMsg->szDeviceId)) {
 			unsigned short usBattery = 0;
 			bool bValidMsg = false;
-			unsigned short usLoose = 0;
-			double dLat = 0.0, dLng = 0.0;
 			pthread_mutex_lock(&g_mutex4DevList);
 			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pMsg->szDeviceId);
 			if (pDev) {
@@ -6007,7 +5268,7 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 						if (pMsg->usBattery > 0) {
 							pDev->deviceBasic.nBattery = (unsigned char)pMsg->usBattery;
 						}
-						usBattery = (unsigned short)pDev->deviceBasic.nBattery;
+						usBattery = pDev->deviceBasic.nBattery;
 						bool bLowpower = ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER);
 						if (!bLowpower) {
 							if (pMsg->usMode == 0) {
@@ -6021,9 +5282,6 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 								bValidMsg = true;
 							}
 						}
-						dLat = pDev->devicePosition.dLatitude;
-						dLng = pDev->devicePosition.dLngitude;
-						usLoose = (unsigned short)pDev->deviceBasic.nLooseStatus;
 						result = E_OK;
 					}
 				}
@@ -6047,7 +5305,6 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 				}
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
 				if (bNotifyMsg) {
-					bool bSend = false;
 					char szMsg[256] = { 0 };
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
 						",\"battery\":%u,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
@@ -6060,51 +5317,31 @@ int AccessService::handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg,
 									", battery=%d, mode=%u, datetime=%s, alarm device lowpower\r\n", __FUNCTION__, __LINE__,
 									szEndpoint, szSession, pMsg->szDeviceId, pMsg->usBattery, pMsg->usMode, szDatetime);
 								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-								bSend = true;
 							}
-						}
-					}
-					if (strlen(szSession)) {
-						bool bNotifyStatus = false;
-						bool bNotifyPosition = false;
-						pthread_mutex_lock(&m_mutex4LinkList);
-						if (zhash_size(m_linkList)) {
-							access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList,
-								szSession);
-							if (pLink) {
-								if (!bSend) {
-									pLink->nNotifyBattery = 1;
-								}
-								else {
-									pLink->nNotifyBattery = 0;
-									pLink->nNotifyOnline = 0;
-									if (pLink->nNotifyStatus) {
-										bNotifyStatus = true;
-										pLink->nNotifyStatus = 0;
-									}
-									if (pLink->nNotifyPosition) {
-										bNotifyPosition = true;
-										pLink->nNotifyStatus = 0;
-									}
+							else {
+								access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+								pLingerMsg->nMessageType = access_service::E_ALARM_DEVICE_LOWPOWER;
+								pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+								strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+								strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+								strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+								if (!addLingerNotifyMessage(pLingerMsg)) {
+									delete pLingerMsg;
+									pLingerMsg = NULL;
 								}
 							}
 						}
-						pthread_mutex_unlock(&m_mutex4LinkList);
-						if (bNotifyStatus) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-								"\"battery\":%hu,\"mode\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
-								access_service::E_ALARM_DEVICE_LOOSE, pMsg->szDeviceId, usBattery, 
-								(usLoose == 1) ? 0 : 1, szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
-						}
-						if (bNotifyPosition) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-								"\"battery\":%hu,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-								szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, usBattery, dLat, dLng,
-								szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+						else {
+							access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+							pLingerMsg->nMessageType = access_service::E_ALARM_DEVICE_LOWPOWER;
+							pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+							strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+							strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+							strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+							if (!addLingerNotifyMessage(pLingerMsg)) {
+								delete pLingerMsg;
+								pLingerMsg = NULL;
+							}
 						}
 					}
 				}
@@ -6121,7 +5358,6 @@ int AccessService::handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const
 	if (pMsg) {
 		if (strlen(pMsg->szDeviceId)) {
 			unsigned short usBattery = 0;
-			double dLat = 0.0, dLng = 0.0;
 			bool bValidMsg = false;
 			pthread_mutex_lock(&g_mutex4DevList);
 			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pMsg->szDeviceId);
@@ -6174,14 +5410,13 @@ int AccessService::handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const
 						strncpy_s(szEndpoint, sizeof(szEndpoint), pSubInfo->szEndpoint, strlen(pSubInfo->szEndpoint));
 					}
 					else {
-						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]not find subscriber for %s\r\n",
+						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]not find subscriber for %s\r\n", 
 							__FUNCTION__, __LINE__, pMsgSubstitle);
 						writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
 					}
 				}
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
 				if (bNotifyMsg) {
-					bool bSend = false;
 					char szMsg[256] = { 0 };
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\""
 						",\"battery\":%u,\"mode\":%u,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, szSession,
@@ -6192,35 +5427,42 @@ int AccessService::handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const
 								", battery=%u, mode=%u, datetime=%s, alarm device loose\r\n", __FUNCTION__, __LINE__, szEndpoint,
 								szSession, pMsg->szDeviceId, pMsg->usBattery, pMsg->usMode, szDatetime);
 							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-							bSend = true;
 						}
-					}
-					if (strlen(szSession)) {
-						bool bNotifyPosition = false;
-						pthread_mutex_lock(&m_mutex4LinkList);
-						access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, szSession);
-						if (pLink) {
-							if (!bSend) {
-								pLink->nNotifyStatus = 1;
+						else {
+							access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+							pLingerMsg->nMessageType = access_service::E_ALARM_DEVICE_LOOSE;
+							pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+							strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+							strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+							strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+							if (!addLingerNotifyMessage(pLingerMsg)) {
+								delete pLingerMsg;
+								pLingerMsg = NULL;
 							}
 							else {
-								pLink->nNotifyStatus = 0;
-								pLink->nNotifyBattery = 0;
-								pLink->nNotifyOnline = 0;
-								if (pLink->nNotifyPosition) {
-									pLink->nNotifyPosition = 0;
-									bNotifyPosition = true;
-								}
+								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s failed, session=%s,"
+									" deviceId=%s, mode=%u, datetime=%s, alarm device loose add into linger notify message\r\n",
+									__FUNCTION__, __LINE__, szEndpoint, szSession, pMsg->szDeviceId, pMsg->usMode, szDatetime);
+								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 							}
 						}
-						pthread_mutex_unlock(&m_mutex4LinkList);
-						if (bNotifyPosition) {
-							char szMsg[256] = { 0 };
-							sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
-								"\"battery\":%hu,\"lat\":%f,\"lng\":%f,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
-								szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, usBattery, dLat, dLng,
-								szDatetime);
-							sendDatatoEndpoint(szMsg, strlen(szMsg), szEndpoint);
+					}
+					else {
+						access_service::LingerNotifyMessage * pLingerMsg = new access_service::LingerNotifyMessage();
+						pLingerMsg->nMessageType = access_service::E_ALARM_DEVICE_LOOSE;
+						pLingerMsg->ulMessageTime = pMsg->ulMessageTime;
+						strncpy_s(pLingerMsg->szSession, sizeof(pLingerMsg->szSession), szSession, strlen(szSession));
+						strncpy_s(pLingerMsg->szMessage, sizeof(pLingerMsg->szMessage), szMsg, strlen(szMsg));
+						strncpy_s(pLingerMsg->szDevice, sizeof(pLingerMsg->szDevice), pMsg->szDeviceId, strlen(pMsg->szDeviceId));
+						if (!addLingerNotifyMessage(pLingerMsg)) {
+							delete pLingerMsg;
+							pLingerMsg = NULL;
+						}
+						else {
+							snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]endpoint is empty, session=%s, deviceId=%s"
+								", mode=%u, datetime=%s, alarm device loose add into linger notify message\r\n", __FUNCTION__,
+								__LINE__, szSession, pMsg->szDeviceId, pMsg->usMode, szDatetime);
+							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 						}
 					}
 				}
@@ -6240,32 +5482,19 @@ void AccessService::initZookeeper()
 		zoo_acreate(m_zkHandle, "/escort", "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, zk_escort_create_completion, this);
 		zoo_acreate(m_zkHandle, "/escort/access", "", 1024, &ZOO_OPEN_ACL_UNSAFE, 0, zk_access_create_completion,
 			this);
-		zoo_acreate(m_zkHandle, "/escort/session", "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, zk_session_create_completion, this);
 	}
 }
 
 int AccessService::competeForMaster()
 {
-	if (m_zkHandle) {
-		while (1) {
-			if (m_bConnectZk) {
-				char * path = make_zkpath(2, ESCORT_ACCESS_PATH, "master");
-				int ret = zoo_acreate(m_zkHandle, path, "", 1024, &ZOO_OPEN_ACL_UNSAFE, ZOO_EPHEMERAL,
-					zk_access_master_create_completion, this);
-				free(path);
-				break;
-			}
-			else {
-				if (!m_nRun) {
-					break;
-				}
-				Sleep(200);
-			}
+	if (m_bConnectZk) {
+		char * path = make_zkpath(2, ESCORT_ACCESS_PATH, "master");
+		int ret = zoo_acreate(m_zkHandle, path, "", 1024, &ZOO_OPEN_ACL_UNSAFE, ZOO_EPHEMERAL,
+			zk_access_master_create_completion, this);
+		free(path);
+		if (ret == 0) {
+			return 0;
 		}
-		//if (ret == 0) {
-		//	loadSessionList(); //加载session到list中
-		//	return 0;
-		//}
 	}
 	return -1;
 }
@@ -6285,8 +5514,7 @@ int AccessService::setAccessData(const char * path, void * data, size_t data_siz
 	if (m_bConnectZk) {
 		char szBuf[1024] = { 0 };
 		memcpy_s(szBuf, 1024, data, data_size);
-		const char * pBuf = szBuf;
-		int ret = zoo_aset(m_zkHandle, path, pBuf, data_size, -1, zk_access_set_completion, this);
+		int ret = zoo_aset(m_zkHandle, path, szBuf, data_size, -1, zk_access_set_completion, this);
 		return ret;
 	}
 	return -1;
@@ -6332,135 +5560,6 @@ int AccessService::getMidwareData(const char * pPath, ZkMidware * pMidware)
 		}
 	}
 	return -1;
-}
-
-void AccessService::zkAddSession(const char * pSession_)
-{
-	if (pSession_ && strlen(pSession_)) {
-		access_service::AppLinkInfo * pLinkInfo = NULL;
-		size_t nLinkInfoSize = sizeof(access_service::AppLinkInfo);
-		pthread_mutex_lock(&m_mutex4LinkList);
-		if (zhash_size(m_linkList)) {
-			access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, pSession_);
-			if (pLink) {
-				pLinkInfo = (access_service::AppLinkInfo *)zmalloc(nLinkInfoSize);
-				memcpy_s(pLinkInfo, nLinkInfoSize, pLink, nLinkInfoSize);
-			}
-		}
-		pthread_mutex_unlock(&m_mutex4LinkList);
-		if (pLinkInfo) {
-			if (m_zkHandle) {
-				char szBuf[1024] = { 0 };
-				memcpy_s(szBuf, sizeof(szBuf), pLinkInfo, nLinkInfoSize);
-				char szPath[128] = { 0 };
-				sprintf_s(szPath, sizeof(szPath), "/escort/session/%s", pLinkInfo->szSession);
-				const char * pBuf = szBuf;
-				ZKSessionNode * pNode = new ZKSessionNode();
-				strncpy_s(pNode->szSession, sizeof(pNode->szSession), pLinkInfo->szSession, strlen(pLinkInfo->szSession));
-				pNode->data = this;
-				const void * pSessionNode = pNode;
-				zoo_acreate(m_zkHandle, szPath, pBuf, 1024, &ZOO_OPEN_ACL_UNSAFE, 0, zk_session_child_create_completion,
-					pSessionNode);
-			}
-			free(pLinkInfo);
-			pLinkInfo = NULL;
-		}
-	}
-}
-
-void AccessService::zkRemoveSession(const char * pSession_)
-{
-	if (m_zkHandle && pSession_ && strlen(pSession_)) {
-		char szFullPath[128] = { 0 };
-		snprintf(szFullPath, sizeof(szFullPath), "/escort/session/%s", pSession_);
-		zoo_adelete(m_zkHandle, szFullPath, -1, zk_session_child_delete_completion, this);
-	}
-}
-
-void AccessService::zkSetSession(const char * pSession_)
-{
-	if (pSession_ && strlen(pSession_)) {
-		access_service::AppLinkInfo * pLinkInfo = NULL;
-		size_t nLinkInfoSize = sizeof(access_service::AppLinkInfo);
-		pthread_mutex_lock(&m_mutex4LinkList);
-		if (zhash_size(m_linkList)) {
-			access_service::AppLinkInfo * pLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, pSession_);
-			if (pLink) {
-				pLinkInfo = new access_service::AppLinkInfo();
-				memcpy_s(pLinkInfo, nLinkInfoSize, pLink, nLinkInfoSize);
-			}
-		}
-		pthread_mutex_unlock(&m_mutex4LinkList);
-		if (pLinkInfo) {
-			if (m_zkHandle) {
-				char szBuf[1024] = { 0 };
-				memcpy_s(szBuf, 1024, pLinkInfo, nLinkInfoSize);
-				char szPath[128] = { 0 };
-				sprintf_s(szPath, sizeof(szPath), "/escort/session/%s", pSession_);
-				const char * pBuf = szBuf;
-				ZKSessionNode * pNode = new ZKSessionNode();
-				strncpy_s(pNode->szSession, sizeof(pNode->szSession), pSession_, strlen(pSession_));
-				pNode->data = this;
-				const void * pSessionNode = pNode;
-				zoo_aset(m_zkHandle, szPath, pBuf, 1024, -1, zk_session_child_set_completion, pSessionNode);
-			}
-		}
-	}
-}
-
-void AccessService::loadSessionList()
-{
-	if (m_zkHandle) {
-		struct String_vector childrenList;
-		zoo_wget_children(m_zkHandle, "/escort/session", zk_session_get_children_watcher, NULL, &childrenList);
-		if (childrenList.count > 0) {
-			for (int i = 0; i < childrenList.count; i++) {
-				char szChildFullPath[128] = { 0 };
-				sprintf_s(szChildFullPath, sizeof(szChildFullPath), "/escort/session/%s", childrenList.data[i]);
-				char szBuf[512] = { 0 };
-				int nBufLen = 512;
-				size_t nAppLinkInfoSize = sizeof(access_service::AppLinkInfo);
-				Stat stat;
-				if (zoo_get(m_zkHandle, szChildFullPath, -1, szBuf, &nBufLen, &stat) == ZOK) {
-					access_service::AppLinkInfo * pLinkInfo = (access_service::AppLinkInfo *)zmalloc(nAppLinkInfoSize);
-					memcpy_s(pLinkInfo, nAppLinkInfoSize, szBuf, nAppLinkInfoSize);
-					pthread_mutex_lock(&m_mutex4LinkList);
-					zhash_update(m_linkList, pLinkInfo->szSession, pLinkInfo);
-					zhash_freefn(m_linkList, pLinkInfo->szSession, free);
-					pthread_mutex_unlock(&m_mutex4LinkList);
-					pthread_mutex_lock(&g_mutex4GuarderList);
-					if (zhash_size(g_guarderList)) {
-						Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, pLinkInfo->szGuarder);
-						if (pGuarder) {
-							strncpy_s(pGuarder->szCurrentSession, sizeof(pGuarder->szCurrentSession), pLinkInfo->szSession,
-								strlen(pLinkInfo->szSession));
-						}
-					}
-					pthread_mutex_unlock(&g_mutex4GuarderList);
-					if (strlen(pLinkInfo->szDeviceId) && strlen(pLinkInfo->szFactoryId) && strlen(pLinkInfo->szOrg)) {
-						char szTopicFilter[64] = { 0 };
-						snprintf(szTopicFilter, sizeof(szTopicFilter), "%s_%s_%s", pLinkInfo->szOrg, pLinkInfo->szFactoryId,
-							pLinkInfo->szDeviceId);
-						size_t nSubInfoSize = sizeof access_service::AppSubscirbeInfo;
-						access_service::AppSubscirbeInfo * pSubInfo = (access_service::AppSubscirbeInfo *)zmalloc(nSubInfoSize);
-						strncpy_s(pSubInfo->szSubFilter, sizeof(pSubInfo->szSubFilter), szTopicFilter, strlen(szTopicFilter));
-						if (strlen(pLinkInfo->szEndpoint)) {
-							strcpy_s(pSubInfo->szEndpoint, sizeof(pSubInfo->szEndpoint), pLinkInfo->szEndpoint);
-						}
-						else {
-							pSubInfo->szEndpoint[0] = '\0';
-						}
-						strcpy_s(pSubInfo->szGuarder, sizeof(pSubInfo->szGuarder), pLinkInfo->szGuarder);
-						strcpy_s(pSubInfo->szSession, sizeof(pSubInfo->szSession), pLinkInfo->szSession);
-						pthread_mutex_lock(&m_mutex4SubscribeList);
-						zhash_update(m_subscribeList, szTopicFilter, pSubInfo);
-						zhash_freefn(m_subscribeList, szTopicFilter, free);
-						pthread_mutex_unlock(&m_mutex4SubscribeList);
-					}
-				}
-			}
-		}
-	}
 }
 
 int AccessService::sendDatatoEndpoint(const char * pData, size_t nDataLen, const char * pEndpoint)
@@ -6591,29 +5690,24 @@ void AccessService::dealNetwork()
 	}
 }
 
-void AccessService::handleLinkDisconnect(const char * pLink_, const char * pUser_, bool bFlag_)
+void AccessService::handleLinkDisconnect(const char * pLink, bool bFlag)
 {
 	char szLog[512] = { 0 };
-	if (pLink_) {
-		std::string strLink = pLink_;
+	if (pLink) {
+		std::string strLink = pLink;
 		char szGuarder[20] = { 0 };
 		char szSession[20] = { 0 };
 		bool bSubscriber = false;
 		char szOrg[40] = { 0 };
 		char szDeviceId[20] = { 0 };
 		pthread_mutex_lock(&m_mutex4LinkDataList);
-		std::map<std::string, access_service::LinkDataInfo *>::iterator iter = m_linkDataList.find(pLink_);
+		std::map<std::string, access_service::LinkDataInfo *>::iterator iter = m_linkDataList.find(pLink);
 		if (iter != m_linkDataList.end()) {
 			access_service::LinkDataInfo * pLinkData = iter->second;
 			if (pLinkData) {
 				pLinkData->nLinkState = 1;
 				if (strlen(pLinkData->szUser)) {
 					strncpy_s(szGuarder, sizeof(szGuarder), pLinkData->szUser, strlen(pLinkData->szUser));
-				}
-				else {
-					if (pUser_ != NULL) {
-						strncpy_s(szGuarder, sizeof(szGuarder), pUser_, strlen(pUser_));
-					}
 				}
 				if (pLinkData->pLingeData && pLinkData->ulTotalDataLen) {
 					free(pLinkData->pLingeData);
@@ -6630,7 +5724,7 @@ void AccessService::handleLinkDisconnect(const char * pLink_, const char * pUser
 			pthread_mutex_lock(&g_mutex4GuarderList);
 			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 			if (pGuarder) {
-				if (strcmp(pGuarder->szLink, pLink_) == 0) {
+				if (strcmp(pGuarder->szLink, pLink) == 0) {
 					if (strlen(pGuarder->szCurrentSession) > 0) {
 						strncpy_s(szSession, sizeof(szSession), pGuarder->szCurrentSession, strlen(pGuarder->szCurrentSession));
 						if (pGuarder->usState == STATE_GUARDER_DUTY || pGuarder->usState == STATE_GUARDER_BIND) {
@@ -6645,7 +5739,7 @@ void AccessService::handleLinkDisconnect(const char * pLink_, const char * pUser
 			pthread_mutex_unlock(&g_mutex4GuarderList);
 		}
 		if (strlen(szSession) > 0) {
-			if (bFlag_) {
+			if (bFlag) {
 				pthread_mutex_lock(&m_mutex4LinkList);
 				access_service::AppLinkInfo * pAppLink = (access_service::AppLinkInfo *)zhash_lookup(m_linkList, szSession);
 				if (pAppLink) {
@@ -6671,7 +5765,7 @@ void AccessService::handleLinkDisconnect(const char * pLink_, const char * pUser
 					access_service::AppSubscirbeInfo * pSubInfo = (access_service::AppSubscirbeInfo *)zhash_lookup(
 						m_subscribeList, szTopic);
 					if (pSubInfo) {
-						if (strcmp(pSubInfo->szEndpoint, pLink_) == 0) {
+						if (strcmp(pSubInfo->szEndpoint, pLink) == 0) {
 							pSubInfo->szEndpoint[0] = '\0';
 						}
 					}
@@ -6680,7 +5774,7 @@ void AccessService::handleLinkDisconnect(const char * pLink_, const char * pUser
 			}
 		}
 		snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]link=%s disconnect, guarder=%s\r\n", 
-			__FUNCTION__, __LINE__, pLink_, szGuarder);
+			__FUNCTION__, __LINE__, pLink, szGuarder);
 		writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 	}
 }
@@ -6940,26 +6034,16 @@ void AccessService::verifyLinkList()
 				}
 			}
 			if (pLink->nActivated == 0) {
-				if (difftime(now, (time_t)pLink->ulActivateTime) <= 300) {
-					if (!verifyLink(pLink->szEndpoint)) { 
-						snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]verify link=%s disconnect, guarder=%s, session=%s"
-							" at time=%ld\r\n", __FUNCTION__, __LINE__, pLink->szEndpoint, pLink->szGuarder, pLink->szSession,
-							(unsigned long)now);
-						writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-						TS_CloseEndpoint(m_uiSrvInst, pLink->szEndpoint);
-						handleLinkDisconnect(pLink->szEndpoint, pLink->szGuarder, false);
-						pLink->szEndpoint[0] = '\0';
-						pLink->nActivated = 0;
-						pLink->ulActivateTime = 0;
-					}
+				if (verifyLink(pLink->szEndpoint)) {
+					pLink->nActivated = 1;
+					pLink->ulActivateTime = (unsigned long)now;
 				}
 				else {
-					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]link=%s, lost connection for more than 5 minute, "
-						"guarder=%s, session=%s at time=%ld\r\n", __FUNCTION__, __LINE__, pLink->szEndpoint, pLink->szGuarder,
-						pLink->szSession, (unsigned long)now);
+					snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]verify link=%s disconnect, guarder=%s, session=%s"
+						" at time=%ld\r\n", __FUNCTION__, __LINE__, pLink->szEndpoint, pLink->szGuarder, pLink->szSession,
+						(long)now);
 					writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-					TS_CloseEndpoint(m_uiSrvInst, pLink->szEndpoint);
-					handleLinkDisconnect(pLink->szEndpoint, pLink->szGuarder, false);
+					handleLinkDisconnect(pLink->szEndpoint, false);
 					pLink->szEndpoint[0] = '\0';
 					pLink->nActivated = 0;
 					pLink->ulActivateTime = 0;
@@ -6975,11 +6059,179 @@ bool AccessService::verifyLink(const char * pEndpoint_)
 {
 	bool result = false;
 	do {
-		if (TS_SendData(m_uiSrvInst, pEndpoint_, NULL, 0) != -1) {
+		if (TS_SendData(m_uiSrvInst, pEndpoint_, "", 0) == 0) {
 			result = true;
 		}
 	} while (0);
 	return result;
+}
+
+bool AccessService::addLingerNotifyMessage(access_service::LingerNotifyMessage * pNotifyMsg_)
+{
+	bool result = false;
+	if (pNotifyMsg_ && strlen(pNotifyMsg_->szSession)) {
+		std::string strSession = pNotifyMsg_->szSession;
+		char szLog[256] = { 0 };
+		snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]add linger message for session=%s, message type=%d, "
+			"deviceId=%s, time=%lu\r\n", __FUNCTION__, __LINE__, strSession.c_str(), pNotifyMsg_->nMessageType,
+			pNotifyMsg_->szDevice, pNotifyMsg_->ulMessageTime);
+		writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+		pthread_mutex_lock(&m_mutex4LingerNotifyMsgList);
+		if (m_lingerNotifyMsgList.empty()) {
+			access_service::LingerNotifyMessageList * pLingerMsgList = new access_service::LingerNotifyMessageList();
+			pLingerMsgList->push(pNotifyMsg_);
+			m_lingerNotifyMsgList.insert(std::make_pair(strSession, pLingerMsgList));
+			result = true;
+		}
+		else {
+			std::map<std::string, access_service::LingerNotifyMessageList *>::iterator iter;
+			iter = m_lingerNotifyMsgList.find(strSession);
+			if (iter != m_lingerNotifyMsgList.end()) {
+				access_service::LingerNotifyMessageList * pLingerMsgList = iter->second;
+				if (pLingerMsgList) {
+					pLingerMsgList->push(pNotifyMsg_);
+					result = true;
+				}
+			}
+			else {
+				access_service::LingerNotifyMessageList * pLingerMsgList = new access_service::LingerNotifyMessageList();
+				pLingerMsgList->push(pNotifyMsg_);
+				m_lingerNotifyMsgList.insert(std::make_pair(strSession, pLingerMsgList));
+				result = true;
+			}
+		}
+		pthread_mutex_unlock(&m_mutex4LingerNotifyMsgList);
+	}
+	return result;
+}
+
+void AccessService::publishNotifyMessage(const char * pSession_, const char * pEndpoint_, const char * pDeviceId_)
+{
+	char szLog[512] = { 0 };
+	pthread_mutex_lock(&m_mutex4LingerNotifyMsgList);
+	if (!m_lingerNotifyMsgList.empty()) {
+		std::string strSession = pSession_;
+		std::map<std::string, access_service::LingerNotifyMessageList *>::iterator iter;
+		iter = m_lingerNotifyMsgList.find(strSession);
+		if (iter != m_lingerNotifyMsgList.end()) {
+			bool bNotifyBattery = false;
+			access_service::LingerNotifyMessageList * pLingerMsgList = iter->second;
+			if (pLingerMsgList) {
+				bool bInterrupt = false;
+				while (!pLingerMsgList->empty()) {
+					access_service::LingerNotifyMessage * pLingerMsg = pLingerMsgList->front();
+					if (pLingerMsg) {
+						char szDatetime[20] = { 0 };
+						format_datetime(pLingerMsg->ulMessageTime, szDatetime, 20);
+						switch (pLingerMsg->nMessageType) {
+							case access_service::E_ALARM_DEVICE_LOWPOWER: {
+								break;
+							}
+							case access_service::E_ALARM_DEVICE_LOOSE: {
+								if (strcmp(pDeviceId_, pLingerMsg->szDevice) == 0) { //ensure the same device
+									if (sendDatatoEndpoint(pLingerMsg->szMessage, strlen(pLingerMsg->szMessage), pEndpoint_) == 0) {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, reissue msg=%s\r\n", __FUNCTION__, __LINE__, pEndpoint_,
+											pLingerMsg->szSession, pLingerMsg->szDevice, szDatetime, pLingerMsg->szMessage);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+									}
+									else {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, reissuse msg failed\r\n", __FUNCTION__, __LINE__, pEndpoint_,
+											pLingerMsg->szSession, pLingerMsg->szDevice, szDatetime);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
+										bInterrupt = true;
+									}
+								}
+								break;
+							}
+							case access_service::E_NOTIFY_DEVICE_POSITION: {
+								if (strcmp(pDeviceId_, pLingerMsg->szDevice) == 0) {
+									if (sendDatatoEndpoint(pLingerMsg->szMessage, strlen(pLingerMsg->szMessage), pEndpoint_) == 0) {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, reissue position msg=%s\r\n", __FUNCTION__, __LINE__,
+											pEndpoint_, pSession_, pDeviceId_, szDatetime, pLingerMsg->szMessage);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+									}
+									else {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, reissue position failed\r\n", __FUNCTION__, __LINE__,
+											pEndpoint_, pSession_, pDeviceId_, szDatetime);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
+										bInterrupt = true;
+									}
+								}
+								break;
+							}
+							case access_service::E_NOTIFY_DEVICE_ONLINE: {
+								if (strcmp(pDeviceId_, pLingerMsg->szDevice) == 0) {
+									if (sendDatatoEndpoint(pLingerMsg->szMessage, strlen(pLingerMsg->szMessage), pEndpoint_) == 0) {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, notify device online\r\n", __FUNCTION__, __LINE__,
+											pEndpoint_, pSession_, pDeviceId_, szDatetime);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+									}
+									else {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, notify device online failed\r\n", __FUNCTION__, __LINE__,
+											pEndpoint_, pSession_, pDeviceId_, szDatetime);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
+										bInterrupt = true;
+									}
+								}
+								break;
+							}
+							case access_service::E_NOTIFY_DEVICE_OFFLINE: {
+								if (strcmp(pDeviceId_, pLingerMsg->szDevice) == 0) {
+									if (sendDatatoEndpoint(pLingerMsg->szMessage, strlen(pLingerMsg->szMessage), pEndpoint_) == 0) {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, notify device offline\r\n", __FUNCTION__, __LINE__, pEndpoint_,
+											pSession_, pDeviceId_, szDatetime);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+									}
+									else {
+										snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]send to endpoint=%s, session=%s, "
+											"deviceId=%s, datetime=%s, notify device offline failed\r\n", __FUNCTION__, __LINE__,
+											pEndpoint_, pSession_, pDeviceId_, szDatetime);
+										writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
+										bInterrupt = true;
+									}
+								}
+								break;
+							}
+							case access_service::E_NOTIFY_DEVICE_BATTERY: {
+								break;
+							}
+							default: {
+								snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]linger Message type=%d, not support type,"
+									" session=%s, device=%s, datetime=%s\r\n", __FUNCTION__, __LINE__, pLingerMsg->nMessageType,
+									pLingerMsg->szSession, pLingerMsg->szDevice, szDatetime);
+								writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
+								break;
+							}
+						}
+						if (bInterrupt) {
+							break;
+						}
+						delete pLingerMsg;
+						pLingerMsg = NULL;
+					}
+					pLingerMsgList->pop();
+				}
+			}
+		}
+		//else {
+		//	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]not find session=%s\r\n", __FUNCTION__,
+		//		__LINE__, strSession.c_str());
+		//	writeLog(szLog, pf_logger::eLOGCATEGORY_WARN, m_usLogType);
+		//}
+	}
+	//else {
+	//	snprintf(szLog, sizeof(szLog), "[access_service]%s[%d]empty linger message\r\n", __FUNCTION__,
+	//		__LINE__);
+	//	writeLog(szLog, pf_logger::eLOGCATEGORY_DEBUG, m_usLogType);
+	//}
+	pthread_mutex_unlock(&m_mutex4LingerNotifyMsgList);
 }
 
 void * dealNetworkThread(void * param)
@@ -7081,7 +6333,11 @@ int supervise(zloop_t * loop, int timer_id, void * arg)
 					}
 				}
 				pthread_mutex_unlock(&pService->m_mutex4RemoteLink);
+				//shorten verifyLink time
 			}
+			//if (pService->m_nTimerTickCount % 30 == 0) {
+			//	pService->verifyLinkList();
+			//}
 			pService->m_nTimerTickCount++;
 			if (pService->m_nTimerTickCount == 360) {//reset when 1 hour
 				pService->m_nTimerTickCount = 0;

@@ -24,7 +24,13 @@ int main(int argc, char ** argv)
 	DWORD dwProcessId = GetCurrentProcessId();
 	printf("PID=%lu, escort access service Instance=%u\n", dwProcessId, uiInst);
 	if (uiInst) {
+#ifdef _DEBUG 
 		getchar();
+#else 
+		while (1) {
+			Sleep(3000);
+		}
+#endif
 		EA_Stop(uiInst);
 		printf("end\n");
 	}

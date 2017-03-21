@@ -17,7 +17,7 @@ extern "C"
 extern "C"
 {
 	/*SERV_API*/ unsigned int __stdcall TS_StartServer(unsigned int uiPort, int nLogType, fMessageCallback fMsgCb,
-		void * pUserData, int nIdleLimit = 2);
+		void * pUserData, int nIdleLimit = 10);
 	/*SERV_API*/ int __stdcall TS_StopServer(unsigned int uiServerInst);
 	/*SERV_API*/ int __stdcall TS_SetLogType(unsigned int uiServerInst, int nLogType);
 	/*SERV_API*/ int __stdcall TS_SendData(unsigned int uiServerInst, const char * szEndPoit, const char * pData,
