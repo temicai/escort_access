@@ -56,6 +56,7 @@ namespace access_service
 		E_CMD_KEEPALIVE = 11,
 		E_CMD_MODIFY_PASSWD = 12,
 		E_CMD_QUERY_TASK = 13,
+		E_CMD_DEVICE_COMMAND = 14, //直接命令传递
 		E_CMD_DEFAULT_REPLY = 100, //未知命令时的回复
 		E_CMD_LOGIN_REPLY = 101,
 		E_CMD_LOGOUT_REPLY = 102,
@@ -68,6 +69,7 @@ namespace access_service
 		E_CMD_KEEPALIVE_REPLY = 111,
 		E_CMD_MODIFY_PASSWD_REPLY = 112,
 		E_CMD_QUERY_TASK_REPLY = 113,
+		E_CMD_DEVICE_COMMAND_REPLY = 114,
 	};
 
 	enum eAppTaskType
@@ -85,6 +87,12 @@ namespace access_service
 		E_NOTIFY_DEVICE_ONLINE = 4,
 		E_NOTIFY_DEVICE_OFFLINE = 5,
 		E_NOTIFY_DEVICE_BATTERY = 6,
+	};
+
+	enum eDeviceCommand 
+	{
+		E_DEV_CMD_ALARM = 1,
+		E_DEV_CMD_RESET = 2,
 	};
 
 	typedef struct tagLogContext
@@ -188,7 +196,7 @@ namespace access_service
 		char szSession[20];
 		unsigned short usTaskType;
 		unsigned short usTaskLimit;
-		char szDestination[32];
+		char szDestination[64];
 		char szTarget[64];
 		char szDatetime[16];
 		tagAppSubmitTask()
@@ -283,6 +291,27 @@ namespace access_service
 			uiQuerySeq = 0;
 		}
 	} AppQueryTask;
+
+	typedef struct tagAppDeviceCommandInfo
+	{
+		char szSession[20];
+		char szFactoryId[4];
+		char szDeviceId[16];
+		int nParam1;
+		int nParam2;
+		int nSeq;
+		char szDatetime[20];
+		tagAppDeviceCommandInfo()
+		{
+			szSession[0] = '\0';
+			szFactoryId[0] = '\0';
+			szDeviceId[0] = '\0';
+			nParam1 = 0;
+			nParam2 = 0;
+			nSeq = 0;
+			szDatetime[0] = '\0';
+		}
+	} AppDeviceCommandInfo;
 
 	typedef struct tagAppLinkInfo
 	{
@@ -385,7 +414,7 @@ protected:
 	void handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd, const char *,
 		unsigned long);
 	void handleAppQueryTask(access_service::AppQueryTask queryTask, const char *, unsigned long);
-
+	void handleAppDeviceCommand(access_service::AppDeviceCommandInfo cmdInfo, const char *);
 	unsigned int getNextRequestSequence();
 	int generateSession(char * pSession, size_t nSize);
 	void generateTaskId(char * pTaskId, size_t nSize);
@@ -402,7 +431,15 @@ protected:
 	int handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const char *);
 	int handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg, const char *);
 	int handleTopicAlarmLooseMsg(TopicAlarmMessageLoose * pMsg, const char *);
+	int handleTopicAlarmFleeMsg(TopicAlarmMessageFlee * pMsg, const char *);
+	int handleTopicDeviceBindMsg(TopicBindMessage * pMsg, const char *);
+	int handleTopicTaskSubmitMsg(TopicTaskMessage * pMsg, const char *);
+	int handleTopicTaskModifyMsg(TopicTaskModifyMessage * pMsg, const char *);
+	int handleTopicTaskCloseMsg(TopicTaskCloseMessage * pMsg, const char *);
+	int handleTopicLoginMsg(TopicLoginMessage * pMsg, const char *);
+	int handleTopicLogoutMsg(TopicLogoutMessage * pMsg, const char *);
 	
+
 	void initZookeeper();
 	int competeForMaster();
 	void masterExist();
@@ -415,7 +452,8 @@ protected:
 	void zkRemoveSession(const char * pSession);
 	void zkSetSession(const char * pSession);
 	void loadSessionList();
-
+	bool getLoadSessionFlag();
+	void setLoadSessionFlag(bool);
 
 	int sendDatatoEndpoint(const char * pData, size_t nDataLen, const char * pEndpoint);
 	int sendDataViaInteractor(const char * pData, size_t nDataLen);
@@ -491,6 +529,8 @@ private:
 	zhash_t * m_subscribeList;	//订阅  key:sub_filter|topic, value: AppSubscribeInfo *
 	pthread_mutex_t m_mutex4LocalTopicMsgList;
 	zlist_t * m_localTopicMsgList;	//TopicMessage
+	bool m_bLoadSession;
+	pthread_mutex_t m_mutex4LoadSession;
 
 	pthread_t m_pthdSupervisor;  //supervisor all the links 
 	zloop_t * m_loop;

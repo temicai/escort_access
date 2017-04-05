@@ -14,7 +14,8 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-const char * kDefaultDeviceId = "3917677397"; //"3917677397"; //= "3917833482";  //"3917862376";
+const char * kDefaultDeviceId = "3917677397";
+//"3917862366"; //"3917677397"; // "3917833482";  //"3917862376";
 
 struct MessageHead
 {
@@ -38,6 +39,7 @@ bool bLogin = false;
 bool bBind = false;
 bool bTask = false;
 bool bModifyEncrypt = false;
+bool bKeepAlive = false;
 
 bool bRunning = false;
 std::mutex mutex4DataQue;
@@ -47,6 +49,7 @@ std::condition_variable cond4AppPos;
 std::queue<RecvData *> dataQue;
 char szSession[20] = { 0 };
 char szTask[12] = { 0 };
+
 
 #define MAKEHEAD(x) {x.mark[0] = 'E';x.mark[1]='C';x.version[0]='1';x.version[1]='0';}
 
@@ -91,6 +94,7 @@ void menu()
 		"'r' or 'R': Revoke flee\n"
 		"'m' or 'M': Modify\n"
 		"'t' or 'T': Query task\n"
+		"'k' or 'K': Keep Link\n"
 		"'h' or 'H': help menu\n"
 		"'q' or 'Q': quit\n");
 }
@@ -250,7 +254,7 @@ void send_func(SOCKET sock)
 		if (c == 'i' || c == 'I') { //test || test
 			if (!bLogin) {
 				char szMsg[256] = { 0 };
-			//	snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"cpf\",\"passwd\":\"885891f7f148da294f784317c27a6c7d\""
+				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"cpf\",\"passwd\":\"885891f7f148da294f784317c27a6c7d\""
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982179c0d0944dee43fb23d2\""
 				",\"datetime\":\"%s\",\"handset\":\"hksx\"}", szDatetime);
 				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test3\",\"passwd\":\"3cf2bc71982"
@@ -299,7 +303,8 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"台湾省无常大道443号\",\"target\":\"330571199010205541&志玲\",\"datetime\":\"%s\"}", 
+					"\"destination\":\"台湾省无常大道第五号凯达西亚特瑞码酒店楼\",\"target\":\"330571199010205541&志玲\","
+					"\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
@@ -386,6 +391,40 @@ void send_func(SOCKET sock)
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":13,\"session\":\"%s\",\"taskId\":\"%s\",\"date"
 					"time\":\"%s\"}", szSession, szTask, szDatetime);
+				sendMsg(sock, szMsg, strlen(szMsg));
+			}
+		}
+		else if (c == 'k' || c == 'K') {
+			if (!bKeepAlive) {
+				bKeepAlive = true;
+				printf("turn on keep alive\n");
+			}
+			else {
+				bKeepAlive = false;
+				printf("turn off keep alive\n");
+			}
+		}
+		else if (c == '1') {
+			if (bBind) {
+				char szMsg[256] = { 0 };
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":1"
+					",\"param2\":0,\"seq\":0,\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+				sendMsg(sock, szMsg, strlen(szMsg));
+			}
+		}
+		else if (c == '2') {
+			if (bBind) {
+				char szMsg[256] = { 0 };
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":1"
+					",\"param2\":1,\"seq\":1,\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+				sendMsg(sock, szMsg, strlen(szMsg));
+			}
+		}
+		else if (c == '3') {
+			if (bBind) {
+				char szMsg[256] = { 0 };
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":2"
+					",\"param2\":0,\"seq\":2,\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 		}
@@ -900,7 +939,7 @@ void position_func(SOCKET sock)
 				bPosition = true;
 			}
 		}
-		if (bPosition && bTask) {		
+		if (bPosition && bTask) {
 			nLastTime = nCurrTime;
 			char szDateTime[20] = { 0 };
 			format_datetime((unsigned long)nCurrTime, szDateTime, sizeof(szDateTime));
@@ -911,6 +950,26 @@ void position_func(SOCKET sock)
 			printf("[Position]app notice postion at time:%lu\n", (unsigned long)nCurrTime);
 		}
 	} while (1);
+}
+
+void alive_func(SOCKET sock)
+{
+	while (bRunning) {
+		if (bKeepAlive) {
+			if (strlen(szSession) && bLogin) {
+				char szDateTime[20] = { 0 };
+				unsigned long now = (unsigned long)time(NULL);
+				format_datetime(now, szDateTime, sizeof(szDateTime));
+				char szCmd[256] = { 0 };
+				snprintf(szCmd, sizeof(szCmd), "{\"cmd\":10,\"session\":\"%s\",\"seq\":1,\"datetime\":\"%s\"}",
+					szSession, szDateTime);
+				sendMsg(sock, szCmd, strlen(szCmd));
+				printf("[Alive]app keep alive at time: %lu\n", now);
+			}
+			Sleep(7000);
+		}
+		Sleep(3000);
+	}
 }
 
 int main()
@@ -940,6 +999,7 @@ int main()
 			std::thread sndThd = std::thread(send_func, sock);
 			std::thread parseThd = std::thread(parse_func);
 			std::thread posThd = std::thread(position_func, sock);
+			std::thread aliveThd = std::thread(alive_func, sock);
 			while (bRunning) {
 				Sleep(500);
 			}
@@ -949,6 +1009,7 @@ int main()
 			parseThd.join();
 			cond4AppPos.notify_one();
 			posThd.join();
+			aliveThd.join();
 			closesocket(sock);
 		}
 	} while (0);
