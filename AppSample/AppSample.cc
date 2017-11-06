@@ -6,16 +6,19 @@
 #include <mutex>
 #include <thread>
 #include <queue>
+#include <map>
 #include <condition_variable>
 #include <time.h>
 #include <string>
 #include "rapidjson\document.h"
 #include <Windows.h>
+#include <fstream>
 
 #pragma comment(lib, "ws2_32.lib")
 
-const char * kDefaultDeviceId = "3917677397";
-//"3917862366"; //"3917677397"; // "3917833482";  //"3917862376";
+typedef std::map<std::string, std::string> KVStringPair;
+
+const char * kDefaultDeviceId = "3917862376";
 
 struct MessageHead
 {
@@ -48,8 +51,11 @@ std::mutex mutex4AppPos;
 std::condition_variable cond4AppPos;
 std::queue<RecvData *> dataQue;
 char szSession[20] = { 0 };
-char szTask[12] = { 0 };
-
+char szTask[16] = { 0 };
+char szDeviceId[20] = { 0 };
+bool bConnected = false;
+char szUser[64] = { 0 };
+char szPasswd[64] = { 0 };
 
 #define MAKEHEAD(x) {x.mark[0] = 'E';x.mark[1]='C';x.version[0]='1';x.version[1]='0';}
 
@@ -96,6 +102,10 @@ void menu()
 		"'t' or 'T': Query task\n"
 		"'k' or 'K': Keep Link\n"
 		"'h' or 'H': help menu\n"
+		"'1','2','3','4': send device command\n"
+		"'5': query person list\n"
+		"'6': query task list\n"
+		"'7': query device status\n"
 		"'q' or 'Q': quit\n");
 }
 
@@ -107,7 +117,11 @@ void recv_func(SOCKET sock)
 	timeout.tv_sec = 1;
 	timeout.tv_usec = 0;
 	fd_set fdRead;
-	char szRecv[512] = { 0 };
+	//char szRecv[1024] = { 0 };
+  unsigned int uiLen = 2 * 1024 * 1024;
+  char * pRecv = new char[uiLen];
+  memset(pRecv, 0, uiLen);
+
 	bool bRecvHead = false;
 	MessageHead msgHead;
 	size_t nHeadSize = sizeof(MessageHead);
@@ -117,7 +131,7 @@ void recv_func(SOCKET sock)
 	while (bRunning) {
 		FD_ZERO(&fdRead);
 		FD_SET(sock, &fdRead);
-		int n = select(sock + 1, &fdRead, NULL, NULL, &timeout);
+		int n = select((int)(sock + 1), &fdRead, NULL, NULL, &timeout);
 		if (n == SOCKET_ERROR) {
 			printf("[RECEIVE]select error:%d\n", WSAGetLastError());
 			break;
@@ -128,8 +142,8 @@ void recv_func(SOCKET sock)
 		else if (FD_ISSET(sock, &fdRead)) {
 			if (!bRecvHead) {
 				if (nOffset == 0) {
-					nRecvLen = recv(sock, (char *)&msgHead, nHeadSize, 0);
-					if (nRecvLen == nHeadSize) {
+					nRecvLen = recv(sock, (char *)&msgHead, (int)nHeadSize, 0);
+					if (nRecvLen == (unsigned int)nHeadSize) {
 						bRecvHead = true;
 						nDataLen = msgHead.uiLen;
 					}
@@ -138,11 +152,12 @@ void recv_func(SOCKET sock)
 					}
 					else if (nRecvLen == SOCKET_ERROR) {
 						printf("[RECEIVE]recv error:%d\n", WSAGetLastError());
+						bConnected = false;
 						break;
 					}
 				}
 				else {
-					nRecvLen = recv(sock, (char *)&msgHead + nOffset, nHeadSize - nOffset, 0);
+					nRecvLen = recv(sock, (char *)&msgHead + nOffset, (unsigned int)nHeadSize - nOffset, 0);
 					if (nRecvLen + nOffset < nHeadSize) {
 						nOffset += nRecvLen;
 					}
@@ -154,7 +169,7 @@ void recv_func(SOCKET sock)
 			}
 			else {
 				if (nOffset == 0) {
-					nRecvLen = recv(sock, szRecv, nDataLen, 0);
+					nRecvLen = recv(sock, pRecv, nDataLen, 0);
 					if (nRecvLen < nDataLen) {
 						nOffset = nRecvLen;
 					}
@@ -163,7 +178,7 @@ void recv_func(SOCKET sock)
 						RecvData * pRecvData = (RecvData *)malloc(sizeof(RecvData));
 						pRecvData->uiDataLen = nDataLen;
 						pRecvData->pData = (unsigned char *)malloc(nDataLen + 1);
-						memcpy_s(pRecvData->pData, nDataLen, szRecv, nDataLen);
+						memcpy_s(pRecvData->pData, nDataLen, pRecv, nDataLen);
 						pRecvData->pData[nDataLen] = '\0';
 						add(pRecvData);
 						bRecvHead = false;
@@ -171,17 +186,18 @@ void recv_func(SOCKET sock)
 					}
 					else if (nRecvLen == SOCKET_ERROR) {
 						printf("[RECEIVE]recv error:%d\n", WSAGetLastError());
+						bConnected = false;
 						break;
 					}
 				}
 				else {
-					nRecvLen = recv(sock, szRecv + nOffset, nDataLen - nOffset, 0);
+					nRecvLen = recv(sock, pRecv + nOffset, nDataLen - nOffset, 0);
 					if (nRecvLen + nOffset == nDataLen) {
 						printf("[RECEIVE]recv %d data\n", nDataLen);
 						RecvData * pRecvData = (RecvData *)malloc(sizeof(RecvData));
 						pRecvData->uiDataLen = nDataLen;
 						pRecvData->pData = (unsigned char *)malloc(nDataLen + 1);
-						memcpy_s(pRecvData->pData, nDataLen, szRecv, nDataLen);
+						memcpy_s(pRecvData->pData, nDataLen, pRecv, nDataLen);
 						pRecvData->pData[nDataLen] = '\0';
 						add(pRecvData);
 						bRecvHead = false;
@@ -192,6 +208,7 @@ void recv_func(SOCKET sock)
 					}
 					else if (nRecvLen == SOCKET_ERROR) {
 						printf("[RECEIVE]recv error:%d\n", WSAGetLastError());
+						bConnected = false;
 						break;
 					}
 				}
@@ -202,7 +219,7 @@ void recv_func(SOCKET sock)
 
 void sendMsg(SOCKET sock, const char * pMsg, size_t nMsgSize)
 {
-	if (pMsg && nMsgSize && sock > 0) {
+	if (pMsg && nMsgSize && sock > 0 && bConnected) {
 		std::string strUtf8Msg = AnsiToUtf8(pMsg);
 		MessageHead msgHead;
 		MAKEHEAD(msgHead);
@@ -213,18 +230,20 @@ void sendMsg(SOCKET sock, const char * pMsg, size_t nMsgSize)
 		//memcpy_s(pBuf, nHeadSize, &msgHead, nHeadSize);
 		//memcpy_s(pBuf + nHeadSize, nMsgSize, pMsg, nMsgSize);
 		size_t nUtf8MsgSize = strUtf8Msg.size();
-		msgHead.uiLen = nUtf8MsgSize;
+		msgHead.uiLen = (unsigned int)nUtf8MsgSize;
 		size_t nHeadSize = sizeof(MessageHead);
-		unsigned int nBufLen = nUtf8MsgSize + nHeadSize;
+		unsigned int nBufLen = (unsigned int)(nUtf8MsgSize + nHeadSize);
 		unsigned char * pBuf = (unsigned char *)malloc(nBufLen + 1);
 		memcpy_s(pBuf, nHeadSize, &msgHead, nHeadSize);
 		memcpy_s(pBuf + nHeadSize, nUtf8MsgSize, strUtf8Msg.c_str(), nUtf8MsgSize);
 		pBuf[nBufLen] = '\0';
-		for (unsigned int i = nHeadSize; i < nBufLen; i++) {
+		for (unsigned int i = (unsigned int)nHeadSize; i < nBufLen; i++) {
 			pBuf[i] += 1;
 			pBuf[i] ^= '8';
 		}
-		send(sock, (const char *)pBuf, nBufLen, 0);
+		if (send(sock, (const char *)pBuf, nBufLen, 0) == SOCKET_ERROR) {
+			bConnected = true;
+		}
 		free(pBuf);
 	}
 }
@@ -247,18 +266,15 @@ void send_func(SOCKET sock)
 {
 	menu();
 	while (bRunning) {
-		char szDatetime[16] = { 0 };
-		format_datetime((unsigned long)time(NULL), szDatetime, sizeof(szDatetime));
 		char c;
 		scanf_s("%c", &c, 1);
+		char szDatetime[16] = { 0 };
+		format_datetime((unsigned long)time(NULL), szDatetime, sizeof(szDatetime));
 		if (c == 'i' || c == 'I') { //test || test
 			if (!bLogin) {
 				char szMsg[256] = { 0 };
-				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"cpf\",\"passwd\":\"885891f7f148da294f784317c27a6c7d\""
-				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test2\",\"passwd\":\"3cf2bc71982179c0d0944dee43fb23d2\""
-				",\"datetime\":\"%s\",\"handset\":\"hksx\"}", szDatetime);
-				//snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"test3\",\"passwd\":\"3cf2bc71982"
-				//	"179c0d0944dee43fb23d2\",\"datetime\":\"%s\"}", szDatetime);
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"%s\",\"passwd\":\"%s\",\"datetime\":\"%s\","
+					"\"handset\":\"\"}", szUser, szPasswd, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -281,7 +297,7 @@ void send_func(SOCKET sock)
 			if (bLogin) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":3,\"session\":\"%s\",\"deviceId\":\"%s\","
-					"\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+					"\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -292,7 +308,7 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":4,\"session\":\"%s\",\"deviceId\":\"%s\","
-					"\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+					"\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -303,7 +319,7 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"台湾省无常大道第五号凯达西亚特瑞码酒店楼\",\"target\":\"330571199010205541&志玲\","
+					"\"destination\":\"鏂颁笘绾姳鍥璡",\"target\":\"35529120010131&鐜嬪皬浜孿","
 					"\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
@@ -408,7 +424,7 @@ void send_func(SOCKET sock)
 			if (bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":1"
-					",\"param2\":0,\"seq\":0,\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+					",\"param2\":0,\"seq\":0,\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 		}
@@ -416,7 +432,7 @@ void send_func(SOCKET sock)
 			if (bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":1"
-					",\"param2\":1,\"seq\":1,\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+					",\"param2\":1,\"seq\":1,\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 		}
@@ -424,10 +440,39 @@ void send_func(SOCKET sock)
 			if (bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":2"
-					",\"param2\":0,\"seq\":2,\"datetime\":\"%s\"}", szSession, kDefaultDeviceId, szDatetime);
+					",\"param2\":0,\"seq\":2,\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 		}
+		else if (c == '4') {
+			if (bBind) {
+				char szMsg[256] = { 0 };
+				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":14,\"session\":\"%s\",\"deviceId\":\"%s\",\"param1\":3"
+					",\"param2\":0,\"seq\":3,\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
+				sendMsg(sock, szMsg, strlen(szMsg));
+			}
+		}
+		else if (c == '5') {
+			char szMsg[256] = { 0 };
+			snprintf(szMsg, sizeof(szMsg), "{\"cmd\":15,\"session\":\"%s\",\"queryPid\":\"12345678\",\"queryMode\":4"
+				",\"seq\":1,\"datetime\":\"%s\"}", szSession, szDatetime);
+			sendMsg(sock, szMsg, strlen(szMsg));
+		}
+		else if (c == '6') {
+			char szMsg[256] = { 0 };
+			sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":16,\"orgId\":\"\",\"seq\":10,\"datetime\":\"%s\"}", szDatetime);
+			sendMsg(sock, szMsg, strlen(szMsg));
+			printf("[SEND]query task list\n");
+		}
+    else if (c == '7') {
+      if (bBind) {
+        char szMsg[256] = { 0 };
+        sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":19,\"session\":\"%s\",\"deviceId\":\"%s\",\"seq\":102,"
+          "\"datetime\":\"%s\"}", szSession, szDeviceId, szDatetime);
+        sendMsg(sock, szMsg, strlen(szMsg));
+        printf("[send]query device status\n");
+      }
+    }
 		Sleep(200);
 	}
 }
@@ -470,7 +515,7 @@ void parse(RecvData * pRecvData)
 									if (doc["taskInfo"][0]["taskId"].IsString()) {
 										size_t nSize = doc["taskInfo"][0]["taskId"].GetStringLength();
 										if (nSize) {
-											strncpy_s(szTask, sizeof(szTask), doc["taskInfo"][0]["taskId"].GetString(), nSize);										
+											strncpy_s(szTask, sizeof(szTask), doc["taskInfo"][0]["taskId"].GetString(), nSize);
 											printf("[PARSE]login task:%s\n", szTask);
 											std::unique_lock<std::mutex> lock(mutex4AppPos);
 											bTask = true;
@@ -515,6 +560,11 @@ void parse(RecvData * pRecvData)
 								if (doc["taskInfo"][0].HasMember("deviceState")) {
 									if (doc["taskInfo"][0]["deviceState"].IsInt()) {
 										printf("[PARSE]login task state:%d\n", doc["taskInfo"][0]["deviceState"].GetInt());
+									}
+								}
+								if (doc["taskInfo"][0].HasMember("online")) {
+									if (doc["taskInfo"][0]["online"].IsInt()) {
+										printf("[PARSE]login task online=%d\n", doc["taskInfo"][0]["online"].GetInt());
 									}
 								}
 								if (doc["taskInfo"][0].HasMember("battery")) {
@@ -679,6 +729,29 @@ void parse(RecvData * pRecvData)
 				}
 				break;
 			}
+			case 107: {
+				if (doc.HasMember("session")) {
+					if (doc["session"].IsString()) {
+						printf("[PARSE]session=%s\n", doc["session"].GetString());
+					}
+				}
+				if (doc.HasMember("retcode")) {
+					if (doc["retcode"].IsInt()) {
+						printf("[PARSE]retcode=%d\n", doc["retcode"].GetInt());
+					}
+				}
+				if (doc.HasMember("taskId")) {
+					if (doc["taskId"].IsString()) {
+						printf("[PARSE]taskId=%s\n", doc["taskId"].GetString());
+					}
+				}
+				if (doc.HasMember("datetime")) {
+					if (doc["datetime"].IsString()) {
+						printf("[PARSE]datetime=%s\n", doc["datetime"].GetString());
+					}
+				}
+				break;
+			}
 			case 108: { //flee
 				if (doc.HasMember("retcode")) {
 					if (doc["retcode"].IsInt()) {
@@ -773,11 +846,91 @@ void parse(RecvData * pRecvData)
 						printf("[PARSE]notice lng:%.06f\n", doc["lng"].GetDouble());
 					}
 				}
+				if (doc.HasMember("coordinate")) {
+					if (doc["coordinate"].IsInt()) {
+						printf("[PARSE]notice coordinate: %d\n", doc["coordinate"].GetInt());
+					}
+				}
 				if (doc.HasMember("datetime")) {
 					if (doc["datetime"].IsString()) {
 						printf("[PARSE]notice datetime:%s\n", doc["datetime"].GetString());
 					}
 				}
+				break;
+			}
+      case 17: {
+        if (doc.HasMember("taskId")) {
+          if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
+            printf("[PARSE]notify task taskId=%s\n", doc["taskId"].GetString());
+          }
+        }
+        if (doc.HasMember("deviceId")) {
+          if (doc["deviceId"].IsString() && doc["deviceId"].GetStringLength()) {
+            printf("[PARSE]notify task deviceId=%s\n", doc["deviceId"].GetString());
+          }
+        }
+        if (doc.HasMember("guarder")) {
+          if (doc["guarder"].IsString() && doc["guarder"].GetStringLength()) {
+            printf("[PARSE]notify task guarder=%s\n", doc["guarder"].GetString());
+          }
+        }
+        if (doc.HasMember("target")) {
+          if (doc["target"].IsString() && doc["target"].GetStringLength()) {
+            printf("[PARSE]notify task target=%s\n", doc["target"].GetString());
+          }
+        }
+        if (doc.HasMember("destination")) {
+          if (doc["destination"].IsString() && doc["destination"].GetStringLength()) {
+            printf("[PARSE]notify task destination=%s\n", doc["destination"].GetString());
+          }
+        }
+        if (doc.HasMember("startTime")) {
+          if (doc["startTime"].IsString() && doc["startTime"].GetStringLength()) {
+            printf("[PARSE]notify task startTime=%s\n", doc["startTime"].GetString());
+          }
+        }
+        if (doc.HasMember("limit")) {
+          if (doc["limit"].IsInt()) {
+            printf("[PARSE]notify task limit=%d\n", doc["limit"].GetInt());
+          }
+        }
+        if (doc.HasMember("type")) {
+          if (doc["type"].IsInt()) {
+            printf("[PARSE]notify task type=%d\n", doc["type"].GetInt());
+          }
+        }
+        break;
+      }
+      case 18: {
+        if (doc.HasMember("taskId")) {
+          if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
+            printf("[PARSE]notify task close taskId=%s\n", doc["taskId"].GetString());
+          }
+        }
+        if (doc.HasMember("datetime")) {
+          if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+            printf("[PARSE]notify task close datetime=%s\n", doc["datetime"].GetString());
+          }
+        }
+        break;
+      }
+      case 111: {
+				if (doc.HasMember("session")) {
+					if (doc["session"].IsString()) {
+						printf("[PARSE]session: %s\n", doc["session"].GetString());
+					}
+				}
+				if (doc.HasMember("seq")) {
+					if (doc["seq"].IsInt()) {
+						printf("[PARSE]seq=%d\n", doc["seq"].GetInt());
+					}
+				}
+				if (doc.HasMember("retcode")) {
+					if (doc["retcode"].IsInt()) {
+						printf("[PARSE]retcode=%d\n", doc["retcode"].GetInt());
+					}
+				}
+				
 				break;
 			}
 			case 112: { //modify passwd reply
@@ -829,37 +982,42 @@ void parse(RecvData * pRecvData)
 							}
 							if (doc["taskInfo"][0].HasMember("type")) {
 								if (doc["taskInfo"][0]["type"].IsInt()) {
-									printf("[PARSE]query task type:%d\n", doc["taskInfo"][0]["type"].GetInt());
+									printf("[PARSE]query task type=%d\n", doc["taskInfo"][0]["type"].GetInt());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("limit")) {
 								if (doc["taskInfo"][0]["limit"].IsInt()) {
-									printf("[PARSE]query task limit:%d\n", doc["taskInfo"][0]["limit"].GetInt());
+									printf("[PARSE]query task limit=%d\n", doc["taskInfo"][0]["limit"].GetInt());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("target")) {
 								if (doc["taskInfo"][0]["target"].IsString()) {
-									printf("[PARSE]query task target:%s\n", doc["taskInfo"][0]["target"].GetString());
+									printf("[PARSE]query task target=%s\n", doc["taskInfo"][0]["target"].GetString());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("destination")) {
 								if (doc["taskInfo"][0]["destination"].IsString()) {
-									printf("[PARSE]query task destination:%s\n", doc["taskInfo"][0]["destination"].GetString());
+									printf("[PARSE]query task destination=%s\n", doc["taskInfo"][0]["destination"].GetString());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("startTime")) {
 								if (doc["taskInfo"][0]["startTime"].IsString()) {
-									printf("[PARSE]query task startTime:%s\n", doc["taskInfo"][0]["startTime"].GetString());
+									printf("[PARSE]query task startTime=%s\n", doc["taskInfo"][0]["startTime"].GetString());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("deviceState")) {
 								if (doc["taskInfo"][0]["deviceState"].IsInt()) {
-									printf("[PARSE]query task state:%d\n", doc["taskInfo"][0]["deviceState"].GetInt());
+									printf("[PARSE]query task state=%d\n", doc["taskInfo"][0]["deviceState"].GetInt());
+								}
+							}
+							if (doc["taskInfo"][0].HasMember("online")) {
+								if (doc["taskInfo"][0]["online"].IsInt()) {
+									printf("[PARSE]query task online=%d\n", doc["taskInfo"][0]["online"].GetInt());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("battery")) {
 								if (doc["taskInfo"][0]["battery"].IsInt()) {
-									printf("[PARSE]query task battery:%d\n", doc["taskInfo"][0]["battery"].GetInt());
+									printf("[PARSE]query task battery=%d\n", doc["taskInfo"][0]["battery"].GetInt());
 								}
 							}
 							if (doc["taskInfo"][0].HasMember("handset")) {
@@ -870,8 +1028,202 @@ void parse(RecvData * pRecvData)
 						}
 					}
 				}
+				break;
 			}
-			default: break;
+			case 114: {
+				if (doc.HasMember("session")) {
+					if (doc["session"].IsString()) {
+						printf("[PARSE]send cmd session=%s\n", doc["session"].GetString());
+					}
+				}
+				if (doc.HasMember("deviceId")) {
+					if (doc["deviceId"].IsString()) {
+						printf("[PARSE]send cmd device=%s\n", doc["deviceId"].GetString());
+					}
+				}
+				if (doc.HasMember("seq")) {
+					if (doc["seq"].IsInt()) {
+						printf("[PARSE]send cmd seq=%d\n", doc["seq"].GetInt());
+					}
+				}
+				if (doc.HasMember("datetime")) {
+					if (doc["datetime"].IsString()) {
+						printf("[PARSE]send cmd datetime=%s\n", doc["datetime"].GetString());
+					}
+				}
+				if (doc.HasMember("retcode")) {
+					if (doc["retcode"].IsInt()) {
+						printf("[PARSE]send cmd retcode=%d\n", doc["retcode"].GetInt());
+					}
+				}
+				break;
+			}
+			case 115: {
+				if (doc.HasMember("session")) {
+					if (doc["session"].IsString()) {
+						printf("[PARSE]query person reply session=%s\n", doc["session"].GetString());
+					}
+					if (doc.HasMember("seq")) {
+						if (doc["seq"].IsInt()) {
+							printf("[PARSE]query person reply seq=%d\n", doc["seq"].GetInt());
+						}
+					}
+					if (doc.HasMember("datetime")) {
+						if (doc["datetime"].IsString()) {
+							printf("[PARSE]query person datetime=%s\n", doc["datetime"].GetString());
+						}
+					}
+					int nCount = 0;
+					if (doc.HasMember("count")) {
+						if (doc["count"].IsInt()) {
+							nCount = doc["count"].GetInt();
+							printf("[PARSE]query person reply count=%d\n", nCount);
+						}
+					}
+					if (doc.HasMember("personList")) {
+						if (doc["personList"].IsArray()) {
+							for (int i = 0; i < nCount; i++) {
+								if (doc["personList"][i].HasMember("id")) {
+									if (doc["personList"][i]["id"].IsString()) {
+										printf("[PARSE]query person reply %d, id=%s\n", i, doc["personList"][i]["id"].GetString());
+									}
+								}
+								if (doc["personList"][i].HasMember("name")) {
+									if (doc["personList"][i]["name"].IsString()) {
+										printf("[PARSE]query person reply %d, name=%s\n", i, doc["personList"][i]["name"].GetString());
+									}
+								}
+								if (doc["personList"][i].HasMember("state")) {
+									if (doc["personList"][i]["state"].IsInt()) {
+										printf("[PARSE]query person reply %d, state=%d\n", i, doc["personList"][i]["state"].GetInt());
+									}
+								}
+							}
+						}
+					}
+				}
+				break;
+			}
+			case 116: {
+				if (doc.HasMember("orgId")) {
+					if (doc["orgId"].IsString()) {
+						printf("[PARSE]query task list org=%s\n", doc["orgId"].GetString());
+					}
+				}
+				if (doc.HasMember("seq")) {
+					if (doc["seq"].IsInt()) {
+						printf("[PARSE]query task list seq=%d\n", doc["seq"].GetInt());
+					}
+				}
+				if (doc.HasMember("datetime")) {
+					if (doc["datetime"].IsString()) {
+						printf("[PARSE]query task list datetime=%s\n", doc["datetime"].GetString());
+					}
+				}
+				int nCount = 0;
+				if (doc.HasMember("count")) {
+					if (doc["count"].IsInt()) {
+						nCount = doc["count"].GetInt();
+						printf("[PARSE]query task list count = %d\n", nCount);
+					}
+				}
+				if (doc.HasMember("list")) {
+					if (doc["list"].IsArray()) {
+						if (nCount) {
+							for (int i = 0; i < nCount; i++) {
+								if (doc["list"][i].HasMember("taskId")) {
+									if (doc["list"][i]["taskId"].IsString()) {
+										printf("[PARSE]query task list %d: taskId=%s\n", i, doc["list"][i]["taskId"].GetString());
+									}
+								}
+								if (doc["list"][i].HasMember("deviceId")) {
+									if (doc["list"][i]["deviceId"].IsString()) {
+										printf("[PARSE]query task list %d: deviceId=%s\n", i, doc["list"][i]["deviceId"].GetString());
+									}
+								}
+								if (doc["list"][i].HasMember("guarderId")) {
+									if (doc["list"][i]["guarderId"].IsString()) {
+										printf("[PARSE]query task list %d: guarderId=%s\n", i, doc["list"][i]["guarderId"].GetString());
+									}
+								}
+								if (doc["list"][i].HasMember("target")) {
+									if (doc["list"][i]["target"].IsString()) {
+										printf("[PARSE]query task list %d: target=%s\n", i, doc["list"][i]["target"].GetString());
+									}
+								}
+								if (doc["list"][i].HasMember("destination")) {
+									if (doc["list"][i]["destination"].IsString()) {
+										printf("[PARSE]query task list %d: destination=%s\n", i, doc["list"][i]["destination"].GetString());
+									}
+								}
+								if (doc["list"][i].HasMember("type")) {
+									if (doc["list"][i]["type"].IsInt()) {
+										printf("[PARSE]query task list %d: type=%d\n", i, doc["list"][i]["type"].GetInt());
+									}
+								}
+								if (doc["list"][i].HasMember("limit")) {
+									if (doc["list"][i]["limit"].IsInt()) {
+										printf("[PARSE]query task list %d: limit=%d\n", i, doc["list"][i]["limit"].GetInt());
+									}
+								}
+								if (doc["list"][i].HasMember("startTime")) {
+									if (doc["list"][i]["startTime"].IsString()) {
+										printf("[PARSE]query task list %d: startTime=%s\n", i, doc["list"][i]["startTime"].GetString());
+									}
+								}
+							}
+						}
+					}
+				}
+				break;
+			}
+      case 119: {
+        if (doc.HasMember("session")) {
+          if (doc["session"].IsString() && doc["session"].GetStringLength()) {
+            printf("[PARSE]query device status: session=%s\n", doc["session"].GetString());
+          }
+        }
+        if (doc.HasMember("deviceId")) {
+          if (doc["deviceId"].IsString() && doc["deviceId"].GetStringLength()) {
+            printf("[PARSE]query device status: deviceId=%s\n", doc["deviceId"].GetString());
+          }
+        }
+        if (doc.HasMember("retcode")) {
+          if (doc["retcode"].IsInt()) {
+            printf("[PARSE]query device status: retcode=%d\n", doc["retcode"].GetInt());
+          }
+        }
+        if (doc.HasMember("status")) {
+          if (doc["status"].IsInt()) {
+            printf("[PARSE]query device status: status=%d\n", doc["status"].GetInt());
+          }
+        }
+				if (doc.HasMember("online")) {
+					if (doc["online"].IsInt()) {
+						printf("[PARSE]queur device status: online=%d\n", doc["online"].GetInt());
+					}
+				}
+        if (doc.HasMember("battery")) {
+          if (doc["battery"].IsInt()) {
+            printf("[PARSE]query device status: battery=%d\n", doc["battery"].GetInt());
+          }
+        }
+        if (doc.HasMember("seq")) {
+          if (doc["seq"].IsInt()) {
+            printf("[PARSE]query device status: seq=%d\n", doc["seq"].GetInt());
+          }
+        }
+        if (doc.HasMember("datetime")) {
+          if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+            printf("[PARSE]query device status: datetime=%s\n", doc["datetime"].GetString());
+          }
+        }
+        break;
+      }
+      default: {
+				printf("not support cmd\n");
+				break;
+			}
 		}
 	}
 	else {
@@ -961,7 +1313,7 @@ void alive_func(SOCKET sock)
 				unsigned long now = (unsigned long)time(NULL);
 				format_datetime(now, szDateTime, sizeof(szDateTime));
 				char szCmd[256] = { 0 };
-				snprintf(szCmd, sizeof(szCmd), "{\"cmd\":10,\"session\":\"%s\",\"seq\":1,\"datetime\":\"%s\"}",
+				snprintf(szCmd, sizeof(szCmd), "{\"cmd\":11,\"session\":\"%s\",\"seq\":1,\"datetime\":\"%s\"}",
 					szSession, szDateTime);
 				sendMsg(sock, szCmd, strlen(szCmd));
 				printf("[Alive]app keep alive at time: %lu\n", now);
@@ -972,20 +1324,147 @@ void alive_func(SOCKET sock)
 	}
 }
 
-int main()
+int loadConf(const char * szFileName, KVStringPair & kvList)
+{
+	int result = -1;
+	std::fstream cfgFile;
+	char buffer[256] = { 0 };
+	cfgFile.open(szFileName, std::ios::in);
+	if (cfgFile.is_open()) {
+		while (!cfgFile.eof()) {
+			cfgFile.getline(buffer, 256, '\n');
+			std::string str = buffer;
+			if (str[0] == '#') { //comment line
+				continue;
+			}
+			size_t n = str.find_first_of('=');
+			if (n != std::string::npos) {
+				std::string keyStr = str.substr(0, n);
+				std::string valueStr = str.substr(n + 1);
+				kvList.insert(std::make_pair(keyStr, valueStr));
+				result = 0;
+			}
+		}
+	}
+	cfgFile.close();
+	return result;
+}
+
+char * readItem(KVStringPair kvList, const char * pItem)
+{
+	if (!kvList.empty()) {
+		if (pItem != "") {
+			KVStringPair::iterator iter = kvList.find(pItem);
+			if (iter != kvList.end()) {
+				std::string strValue = iter->second;
+				const char * pValue = strValue.c_str();
+				size_t nSize = strlen(pValue);
+				if (nSize) {
+					char * value = (char *)malloc(nSize + 1);
+					if (value) {
+						memcpy_s(value, nSize + 1, pValue, nSize);
+						value[nSize] = '\0';
+						return value;
+					}
+				}
+			}
+		}
+	}
+	return NULL;
+}
+
+int main(int argc, char ** argv)
 {
 	srand((unsigned int)time(NULL));
 	WSADATA wsaData;
-	WSAStartup(MAKEWORD(2,2), &wsaData);
-	printf("start, device=%s\n", kDefaultDeviceId);
+	WSAStartup(MAKEWORD(2, 2), &wsaData);
+	char szSrvIp[20] = "127.0.0.1";
+	unsigned nPort = 22000;
+	char szFileName[256] = { 0 };
+	GetModuleFileNameA(NULL, szFileName, sizeof(szFileName));
+	char szDriver[32] = { 0 };
+	char szDir[256] = { 0 };
+	_splitpath_s(szFileName, szDriver, sizeof(szDriver), szDir, sizeof(szDir), NULL, 0, NULL, 0);
+	char szCfgFile[256] = { 0 };
+	sprintf_s(szCfgFile, sizeof(szCfgFile), "%s%sAppSample.cfg", szDriver, szDir);
+	KVStringPair kvList;
+	if (loadConf(szCfgFile, kvList) == 0) {
+		char * pIp = readItem(kvList, "ip");
+		char *pPort = readItem(kvList, "port");
+		char *pDevice = readItem(kvList, "device");
+		char * pUser = readItem(kvList, "user");
+		char * pPwd = readItem(kvList, "passwd");
+		if (pIp) {
+			if (strlen(pIp) > 0) {
+				strcpy_s(szSrvIp, sizeof(szSrvIp), pIp);
+			}
+			free(pIp);
+		}
+		if (pPort) {
+			if (strlen(pPort) > 0) {
+				nPort = (unsigned )atoi(pPort);
+			}
+			free(pPort);
+		}
+		if (pDevice) {
+			if (strlen(pDevice)) {
+				strcpy_s(szDeviceId, sizeof(szDeviceId), pDevice);
+			}
+			free(pDevice);
+		}
+		if (pUser) {
+			if (strlen(pUser)) {
+				strcpy_s(szUser, sizeof(szUser), pUser);
+			}
+			free(pUser);
+		}
+		if (pPwd) {
+			if (strlen(pPwd)) {
+				strcpy_s(szPasswd, sizeof(szPasswd), pPwd);
+			}
+			free(pPwd);
+		}
+	}
 	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (argc > 1) {
+		if (argc == 2) {
+			//appname, ip
+			if (strlen(argv[1])) {
+				strcpy_s(szSrvIp, sizeof(szSrvIp), argv[1]);
+			}
+		}
+		else if (argc == 3) {
+			//appname, ip, port
+			if (strlen(argv[1])) {
+				strcpy_s(szSrvIp, sizeof(szSrvIp), argv[1]);
+			}
+			if (strlen(argv[2])) {
+				nPort = (unsigned )atoi(argv[2]);
+			}
+		}
+		else if (argc == 4) {
+			//appname, ip, port, device
+			if (strlen(argv[1])) {
+				strcpy_s(szSrvIp, sizeof(szSrvIp), argv[1]);
+			}
+			if (strlen(argv[2])) {
+				nPort = (unsigned)atoi(argv[2]);
+			}
+			if (strlen(argv[3])) {
+				strcpy_s(szDeviceId, sizeof(szDeviceId), argv[3]);
+			}
+		}
+	}
+	if (strlen(szDeviceId) == 0) {
+		strncpy_s(szDeviceId, sizeof(szDeviceId), kDefaultDeviceId, strlen(kDefaultDeviceId));
+	} 
+	printf("device=%s\n", szDeviceId);
 	do {
 		if (sock != INVALID_SOCKET) {
 			struct sockaddr_in addr;
 			addr.sin_family = AF_INET;
-			addr.sin_port = htons(22000);
-			inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-			//inet_pton(AF_INET, "112.74.196.90", &addr.sin_addr);
+			addr.sin_port = htons(nPort);
+			inet_pton(AF_INET, szSrvIp, &addr.sin_addr);
 			if (connect(sock, (const sockaddr *)&addr, sizeof(addr)) < 0) {
 				printf("disconnect\n");
 				closesocket(sock);
@@ -995,6 +1474,7 @@ int main()
 			bLogin = false;
 			bBind = false;
 			bTask = false;
+			bConnected = true;
 			std::thread recvThd = std::thread(recv_func, sock);
 			std::thread sndThd = std::thread(send_func, sock);
 			std::thread parseThd = std::thread(parse_func);
@@ -1011,6 +1491,7 @@ int main()
 			posThd.join();
 			aliveThd.join();
 			closesocket(sock);
+			bConnected = false;
 		}
 	} while (0);
 	printf("stop\n");

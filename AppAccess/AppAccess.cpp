@@ -11,27 +11,30 @@
 int main(int argc, char ** argv)
 {
 	char szCfgFile[256] = { 0 };
-	unsigned int uiInst = 0;
+	unsigned long long ullInst = 0;
 	if (argc == 3 && (strcmp(argv[1], "-l") == 0)) {
 		snprintf(szCfgFile, sizeof(szCfgFile), "%s", argv[2]);
 	}
-	if (strlen(szCfgFile)) {
-		uiInst = EA_Start();
+	if (strlen(szCfgFile) == 0) {
+		ullInst = EA_Start();
 	}
 	else {
-		uiInst = EA_Start(szCfgFile);
+		ullInst = EA_Start(szCfgFile);
 	}
 	DWORD dwProcessId = GetCurrentProcessId();
-	printf("PID=%lu, escort access service Instance=%u\n", dwProcessId, uiInst);
-	if (uiInst) {
-#ifdef _DEBUG 
-		getchar();
-#else 
+	printf("PID=%lu, escort access service Instance=%llu\n", dwProcessId, ullInst);
+	if (ullInst) {
 		while (1) {
-			Sleep(3000);
-		}
+#ifdef _DEBUG 
+			char c = 0;
+			scanf_s("%c", &c, 1);
+			if (c == 'q') {
+				break;
+			}
 #endif
-		EA_Stop(uiInst);
+			Sleep(500);
+		}
+		EA_Stop(ullInst);
 		printf("end\n");
 	}
 	else {

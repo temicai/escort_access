@@ -324,7 +324,7 @@ void recvFunc(LinkContext * pLinkList, int nSize)
 							pLinkList[i].nRecvHead = 1;
 							pLinkList[i].nRecvOffset = 0;
 						}
-						else if (nRecvLen < nHeadSize) {
+						else if (nRecvLen < (int)nHeadSize) {
 							pLinkList[i].nRecvOffset = nRecvLen;
 						}
 						else if (nRecvLen == SOCKET_ERROR) {
@@ -335,10 +335,10 @@ void recvFunc(LinkContext * pLinkList, int nSize)
 					else {
 						nRecvLen = recv(pLinkList[i].sock, (char *)&pLinkList[i].msgHead + pLinkList[i].nRecvOffset,
 							nHeadSize - pLinkList[i].nRecvOffset, 0);
-						if (nRecvLen + pLinkList[i].nRecvOffset < nHeadSize) {
+						if (nRecvLen + pLinkList[i].nRecvOffset < (int)nHeadSize) {
 							pLinkList[i].nRecvOffset += nRecvLen;
 						}
-						else if (nRecvLen + pLinkList[i].nRecvOffset == nHeadSize) {
+						else if (nRecvLen + pLinkList[i].nRecvOffset == (int)nHeadSize) {
 							pLinkList->nRecvHead = 1;
 							pLinkList->nRecvOffset = 0;
 						}
@@ -350,8 +350,8 @@ void recvFunc(LinkContext * pLinkList, int nSize)
 				}
 				else { 
 					if (pLinkList[i].nRecvOffset == 0) {
-						nRecvLen = recv(pLinkList[i].sock, pLinkList[i].szBuf, pLinkList[i].msgHead.uiLen, 0);
-						if (nRecvLen < pLinkList[i].msgHead.uiLen) {
+						nRecvLen = recv(pLinkList[i].sock, pLinkList[i].szBuf, (int)pLinkList[i].msgHead.uiLen, 0);
+						if (nRecvLen < (int)pLinkList[i].msgHead.uiLen) {
 							pLinkList[i].nRecvOffset = nRecvLen;
 						}
 						else if (nRecvLen == pLinkList[i].msgHead.uiLen) {
@@ -375,8 +375,8 @@ void recvFunc(LinkContext * pLinkList, int nSize)
 					}
 					else {
 						nRecvLen = recv(pLinkList[i].sock, pLinkList[i].szBuf + pLinkList[i].nRecvOffset,
-							pLinkList[i].msgHead.uiLen - pLinkList[i].nRecvOffset, 0);
-						if (nRecvLen < pLinkList[i].msgHead.uiLen - pLinkList[i].nRecvOffset) {
+							(int)pLinkList[i].msgHead.uiLen - pLinkList[i].nRecvOffset, 0);
+						if (nRecvLen < (int)pLinkList[i].msgHead.uiLen - pLinkList[i].nRecvOffset) {
 							pLinkList[i].nRecvOffset += nRecvLen;
 						}
 						else if (nRecvLen == pLinkList[i].msgHead.uiLen - pLinkList[i].nRecvOffset) {

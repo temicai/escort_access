@@ -29,17 +29,14 @@ const char gSecret = '8';
 #pragma comment(lib, "libzmq.lib")
 #pragma comment(lib, "czmq.lib")
 
-#define USE_VPN 1
-
-#if USE_VPN
-#include "tcp_server.h"
-#pragma comment(lib, "tcp_server.lib")
-#else
 #include "iocp_tcp_server.h"
 #pragma comment(lib, "iocp_tcp_server.lib")
-#endif
 
+#ifdef _DEBUG
+#pragma comment(lib, "zookeeper_d.lib")
+#else 
 #pragma comment(lib, "zookeeper.lib")
+#endif
 #pragma comment(lib, "libsodium.lib")
 
 
@@ -61,29 +58,20 @@ namespace access_service
 		E_CMD_KEEPALIVE = 11,
 		E_CMD_MODIFY_PASSWD = 12,
 		E_CMD_QUERY_TASK = 13,
-		E_CMD_DEVICE_COMMAND = 14, 
-		E_CMD_QUERY_PERSON = 15,
-		E_CMD_QUERY_TASK_LIST = 16,
-		E_CMD_NOTIFY_TASK_START = 17,
-		E_CMD_NOTIFY_TASK_STOP = 18,
-    E_CMD_QUERY_DEVICE_STATUS = 19,
-		E_CMD_DEFAULT_REPLY = 100, 
+		E_CMD_DEVICE_COMMAND = 14, //直接命令传递
+		E_CMD_DEFAULT_REPLY = 100, //未知命令时的回复
 		E_CMD_LOGIN_REPLY = 101,
 		E_CMD_LOGOUT_REPLY = 102,
 		E_CMD_BIND_REPLY = 103,
 		E_CMD_UNBIND_REPLY = 104,
 		E_CMD_TASK_REPLY = 105,
 		E_CMD_TAKK_CLOSE_REPLY = 106,
-		E_CMD_POSITION_REPLY = 107,
 		E_CMD_FLEE_REPLY = 108,
 		E_CMD_FLEE_REVOKE_REPLY = 109,
 		E_CMD_KEEPALIVE_REPLY = 111,
 		E_CMD_MODIFY_PASSWD_REPLY = 112,
 		E_CMD_QUERY_TASK_REPLY = 113,
 		E_CMD_DEVICE_COMMAND_REPLY = 114,
-		E_CMD_QUERY_PERSON_REPLY = 115,
-		E_CMD_QUERY_TASK_LIST_REPLY = 116,
-    E_CMD_QUERY_DEVICE_STATUS_REPLY = 119,
 	};
 
 	enum eAppTaskType
@@ -110,22 +98,6 @@ namespace access_service
 		E_DEV_CMD_ALARM = 1,
 		E_DEV_CMD_RESET = 2,
 		E_DEV_CMD_QUERY_POSITION = 3,
-	};
-
-	enum eQueryMode
-	{
-		E_QMODE_EQUAL = 0,
-		E_QMODE_NOT_EQUAL = 1,
-		E_QMODE_FORE_LIKE = 2,
-		E_QMODE_TAIL_LIKE = 3,
-		E_QMODE_MIDDLE_LIKE = 4,
-	};
-
-	enum eParamType
-	{
-		E_PARAM_LOGTYPE = 1, 
-		E_PARAM_TASK_CLOSE_CHECK_STATUS = 2,
-		E_PARAM_TASK_FLEE_REPORT_REPLICATED = 3,
 	};
 
 	typedef struct tagLogContext
@@ -162,9 +134,9 @@ namespace access_service
 	{
 		char szLinkId[32];
 		int nLinkState; // 0: on, 1: off
-		unsigned int uiTotalDataLen;
-		unsigned int uiLingeDataLen; 
-		unsigned int uiLackDataLen;	
+		unsigned long ulTotalDataLen;
+		unsigned long ulLingeDataLen; 
+		unsigned long ulLackDataLen;	
 		unsigned char * pLingeData;
 		char szUser[20];
 		tagLinkData() 
@@ -172,9 +144,9 @@ namespace access_service
 			szLinkId[0] = '\0';
 			szUser[0] = '\0';
 			nLinkState = 0;
-			uiTotalDataLen = 0;
-			uiLingeDataLen = 0;
-			uiLackDataLen = 0;
+			ulTotalDataLen = 0;
+			ulLingeDataLen = 0;
+			ulLackDataLen = 0;
 			pLingeData = NULL;
 		}
 		~tagLinkData() {}
@@ -206,11 +178,11 @@ namespace access_service
 
 	typedef struct tagAppBind
 	{
+		unsigned int uiReqSeq;
 		char szSesssion[20];
 		char szFactoryId[4];
 		char szDeviceId[16];
 		char szDateTime[16];
-		unsigned int uiReqSeq;
 		int nMode; //0-bind 1-unbind;
 		tagAppBind()
 		{
@@ -225,8 +197,8 @@ namespace access_service
 
 	typedef struct tagAppSubmitTask
 	{
-		char szSession[20];
 		unsigned int uiReqSeq;
+		char szSession[20];
 		unsigned short usTaskType;
 		unsigned short usTaskLimit;
 		char szDestination[64];
@@ -246,32 +218,31 @@ namespace access_service
 
 	typedef struct tagAppCloseTask
 	{
-		char szSession[20];
-		char szTaskId[16];
 		unsigned int uiReqSeq;
+		char szSession[20];
+		char szTaskId[12];
 		int nCloseType; //0-normal,1-linge
 		char szDatetime[16];
 	} AppCloseTaskInfo;
 
 	typedef struct tagAppPosition
 	{
+		unsigned int uiReqSeq;
 		char szSession[20];
-		char szTaskId[16];
+		char szTaskId[12];
 		double dLat;
 		double dLng;
-		int nCoordinate;
-		unsigned int uiReqSeq;
 		char szDatetime[16];
-		
+		int nCoordinate;
 	} AppPositionInfo;
 
 	typedef struct tagAppSubmitFlee
 	{
+		unsigned int uiReqSeq;
 		char szSession[20];
-		char szTaskId[16];
+		char szTaskId[12];
 		char szDatetime[16];
 		int nMode; // 0-flee 1-flee revoke
-		unsigned int uiReqSeq;
 		tagAppSubmitFlee()
 		{
 			uiReqSeq = 0;
@@ -315,7 +286,7 @@ namespace access_service
 	typedef struct tagAppQueryTask
 	{
 		char szSession[20];
-		char szTaskId[16];
+		char szTaskId[12];
 		char szDatetime[16];
 		unsigned int uiQuerySeq;
 		tagAppQueryTask()
@@ -334,7 +305,7 @@ namespace access_service
 		char szDeviceId[16];
 		int nParam1;
 		int nParam2;
-		unsigned int nSeq;
+		int nSeq;
 		char szDatetime[20];
 		tagAppDeviceCommandInfo()
 		{
@@ -348,52 +319,6 @@ namespace access_service
 		}
 	} AppDeviceCommandInfo;
 
-	typedef struct tagAppQueryPerson
-	{
-		char szSession[20];
-		char szQryPersonId[32];
-		int nQryMode;
-		unsigned int uiQeurySeq;
-		char szQryDatetime[16];
-		tagAppQueryPerson()
-		{
-			szSession[0] = '\0';
-			szQryPersonId[0] = '\0';
-			szQryDatetime[0] = '\0';
-			uiQeurySeq = 0;
-		}
-	} AppQueryPerson;
-
-	typedef struct tagAppQueryTaskList
-	{
-		char szOrgId[40];
-		char szDatetime[20];
-		unsigned int uiQrySeq;
-		tagAppQueryTaskList()
-		{
-			szOrgId[0] = '\0';
-			szDatetime[0] = '\0';
-			uiQrySeq = 0;
-		}
-	} AppQueryTaskList;
-
-  typedef struct tagAppQueryDeviceStatus
-  {
-    char szSession[20];
-    char szFactoryId[4];
-    char szDeviceId[16];
-    char szDatetime[20];
-    unsigned int uiQrySeq;
-    tagAppQueryDeviceStatus()
-    {
-      szSession[0] = '\0';
-      szFactoryId[0] = '\0';
-      szDeviceId[0] = '\0';
-      szDatetime[0] = '\0';
-      uiQrySeq = 0;
-    }
-  } AppQueryDeviceStatus;
-
 	typedef struct tagAppLinkInfo
 	{
 		char szSession[20];
@@ -402,14 +327,14 @@ namespace access_service
 		char szFactoryId[4];
 		char szDeviceId[16];
 		char szOrg[40];
-		char szTaskId[16];
+		char szTaskId[12];
 		char szHandset[64];
 		int nActivated;//0:false, 1:true
 		int nNotifyBattery : 8;
 		int nNotifyStatus : 8;
 		int nNotifyPosition : 8;
 		int nNotifyOnline : 8;
-		unsigned long long ulActivateTime;
+		unsigned long ulActivateTime;
 		tagAppLinkInfo()
 		{
 			szSession[0] = '\0';
@@ -442,12 +367,12 @@ namespace access_service
 			szGuarder[0] = '\0';
 			szEndpoint[0] = '\0';
 		}
-	} AppSubscribeInfo;
+	} AppSubscirbeInfo;
 
 	typedef struct tagRemoteLinkInfo
 	{
 		int nActive; //0-false,1-true
-		unsigned long long ulLastActiveTime; //default 0
+		unsigned long ulLastActiveTime; //default 0
 		tagRemoteLinkInfo()
 		{
 			nActive = 0;
@@ -470,7 +395,6 @@ public:
 	int StopAccessService();
 	void SetLogType(unsigned short usLogType);
 	int GetStatus();
-	void SetParameter(int nParamType, int nParamValue);
 protected:
 	void initLog();
 	bool addLog(access_service::LogContext * pLog);
@@ -480,25 +404,23 @@ protected:
 	bool addAppMsg(MessageContent * pMsg);
 	void dealAppMsg();
 	void parseAppMsg(MessageContent * pMsg);
-	int getWholeMessage(const unsigned char * pData, unsigned int uiDataLen, unsigned int uiIndex, 
-		unsigned int & uiBeginIndex, unsigned int & uiEndIndex, unsigned int & uiUnitLen);
-	void decryptMessage(unsigned char * pData, unsigned int uiBeginIndex, unsigned int ulEndIndex);
-	void encryptMessage(unsigned char * pData, unsigned int uiBeginIndex, unsigned int ulEndIndex);
-	void handleAppLogin(access_service::AppLoginInfo loginInfo, const char *, unsigned long long);
-	void handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char *, unsigned long long);
-	void handleAppBind(access_service::AppBindInfo bindInfo, const char *, unsigned long long);
-	void handleAppSubmitTask(access_service::AppSubmitTaskInfo taskInfo, const char *, unsigned long long);
-	void handleAppCloseTask(access_service::AppCloseTaskInfo taskInfo, const char *, unsigned long long);
-	void handleAppPosition(access_service::AppPositionInfo positionInfo, const char *, unsigned long long);
-	void handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, const char *, unsigned long long);
-	void handleAppKeepAlive(access_service::AppKeepAlive keepAlive, const char *, unsigned long long);
-	void handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd, const char *, 
-		unsigned long long);
-	void handleAppQueryTask(access_service::AppQueryTask queryTask, const char *, unsigned long long);
+	int getWholeMessage(const unsigned char * pData, unsigned long ulDataLen, unsigned long ulIndex, 
+		unsigned long & ulBeginIndex, unsigned long & ulEndIndex, unsigned int & uiUnitLen);
+	void decryptMessage(unsigned char * pData, unsigned long ulBeginIndex, unsigned long ulEndIndex);
+	void encryptMessage(unsigned char * pData, unsigned long ulBeginIndex, unsigned long ulEndIndex);
+	void handleAppLogin(access_service::AppLoginInfo loginInfo, const char *, unsigned long);
+	void handleAppLoginEx(access_service::AppLoginInfo, const char *, unsigned long);
+	void handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char *, unsigned long);
+	void handleAppBind(access_service::AppBindInfo bindInfo, const char *, unsigned long);
+	void handleAppSubmitTask(access_service::AppSubmitTaskInfo taskInfo, const char *, unsigned long);
+	void handleAppCloseTask(access_service::AppCloseTaskInfo taskInfo, const char *, unsigned long);
+	void handleAppPosition(access_service::AppPositionInfo positionInfo, const char *, unsigned long);
+	void handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, const char *, unsigned long);
+	void handleAppKeepAlive(access_service::AppKeepAlive keepAlive, const char *, unsigned long);
+	void handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd, const char *,
+		unsigned long);
+	void handleAppQueryTask(access_service::AppQueryTask queryTask, const char *, unsigned long);
 	void handleAppDeviceCommand(access_service::AppDeviceCommandInfo cmdInfo, const char *);
-	void handleAppQueryPerson(access_service::AppQueryPerson queryPerson, const char *);
-	void handleAppQueryTaskList(access_service::AppQueryTaskList * pQryTaskList, const char *);
-  void handleAppQueryDeviceStatus(access_service::AppQueryDeviceStatus *, const char *);
 	unsigned int getNextRequestSequence();
 	int generateSession(char * pSession, size_t nSize);
 	void generateTaskId(char * pTaskId, size_t nSize);
@@ -525,6 +447,7 @@ protected:
 	int handleTopicLoginMsg(TopicLoginMessage * pMsg, const char *);
 	int handleTopicLogoutMsg(TopicLogoutMessage * pMsg, const char *);
 	
+
 	void initZookeeper();
 	int competeForMaster();
 	void masterExist();
@@ -549,9 +472,6 @@ protected:
 	void readDataBuffer();
 	void verifyLinkList();
 	bool verifyLink(const char * pEndpoint);
-	void loadOrgList(bool flag = false);
-	//void addElement(std::set<std::string> & list, std::string element);
-	void findOrgChild(std::string strOrgId, std::set<std::string> & childList);
 
 	friend void * dealAppMsgThread(void *);
 	friend void * dealTopicMsgThread(void *);
@@ -578,28 +498,26 @@ protected:
 	friend void zk_session_child_set_completion(int rc, const struct Stat * stat, const void * data);
 private:
 
-	unsigned long long m_ullSrvInst;
+	unsigned int m_uiSrvInst;
 
 	int m_nRun;
 	unsigned short m_usSrvPort;
-	int m_nTaskCloseCheckStatus;
-	int m_nTaskFleeReplicatedReport;
 	
 	pthread_t m_pthdLog;
 	pthread_mutex_t m_mutex4LogQueue;
 	pthread_cond_t m_cond4LogQueue;
 	std::queue<access_service::LogContext *> m_logQueue;
 	unsigned short m_usLogType;
-	unsigned long long m_ullLogInst;
+	unsigned int m_uiLogInst;
 	char m_szLogRoot[256];
 	
 	zctx_t * m_ctx;
-	void * m_subscriber;
-	void * m_interactor;
+	void * m_subscriber;	//订阅者
+	void * m_interactor;	//交互者
 	char m_szInteractorIdentity[40];
-	void * m_seeker;
+	void * m_seeker;			//咨询者
 	char m_szSeekerIdentity[40];
-	pthread_t m_pthdNetwork;
+	pthread_t m_pthdNetwork;	//网络通信
 
 	zhandle_t * m_zkHandle;
 	char m_szHost[512];
@@ -611,20 +529,20 @@ private:
 	pthread_mutex_t m_mutex4AppMsgQueue;
 	pthread_cond_t m_cond4AppMsgQueue;
 	std::queue<MessageContent *> m_appMsgQueue;
-	pthread_t m_pthdAppMsg;
+	pthread_t m_pthdAppMsg;		//App消息线程
 	pthread_mutex_t m_mutex4LinkDataList;
-	std::map<std::string, access_service::LinkDataInfo *> m_linkDataList; //key:linkId 
+	std::map<std::string, access_service::LinkDataInfo *> m_linkDataList; //用来记录连接的数据情况 key:linkId 
 	
-	pthread_mutex_t m_mutex4LinkList; 
+	pthread_mutex_t m_mutex4LinkList; //连接
 	zhash_t * m_linkList; //key: session, value: AppLinkInfo *
 	pthread_mutex_t m_mutex4SubscribeList;
-	zhash_t * m_subscribeList;	//key:sub_filter|topic, value: AppSubscribeInfo *
+	zhash_t * m_subscribeList;	//订阅  key:sub_filter|topic, value: AppSubscribeInfo *
 	pthread_mutex_t m_mutex4LocalTopicMsgList;
 	zlist_t * m_localTopicMsgList;	//TopicMessage
 	bool m_bLoadSession;
 	pthread_mutex_t m_mutex4LoadSession;
 
-	pthread_t m_pthdSupervisor;//supervisor all the links 
+	pthread_t m_pthdSupervisor;  //supervisor all the links 
 	zloop_t * m_loop;
 	int m_nTimer4Supervise;
 	int m_nTimerTickCount; //
@@ -652,8 +570,6 @@ private:
 	static pthread_mutex_t g_mutex4DevList;
 	static zhash_t * g_taskList; //key: taskId , unfinish|executing tasks
 	static pthread_mutex_t g_mutex4TaskList; 
-	static std::map<std::string, OrganizationEx *> g_orgList2;
-	static pthread_mutex_t g_mutex4OrgList;
 	static BOOL g_bInitBuffer;
 
 };

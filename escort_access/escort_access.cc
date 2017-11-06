@@ -8,7 +8,7 @@
 typedef std::map<std::string, std::string> KVStringPair;
 
 static char g_szDllDir[256] = { 0 };
-std::map<unsigned int, AccessService *> g_instList;
+std::map<unsigned long long, AccessService *> g_instList;
 pthread_mutex_t g_mutex4InstList;
 
 int loadConf(const char * szFileName, KVStringPair & kvList);
@@ -28,15 +28,14 @@ BOOL APIENTRY DllMain(void * hInst, unsigned long ulReason, void * pReserved)
 				char fname[256] = { 0 };
 				char ext[32] = { 0 };
 				_splitpath_s(szPath, drive, 32, dir, 256, fname, 256, ext, 32);
-				snprintf(g_szDllDir, sizeof(g_szDllDir), "%s%s", drive, dir);
+				sprintf_s(g_szDllDir, sizeof(g_szDllDir), "%s%s", drive, dir);
 			}
 			break;
 		}
 		case DLL_PROCESS_DETACH: {
 			pthread_mutex_lock(&g_mutex4InstList);
 			if (!g_instList.empty()) {
-				std::map<unsigned int, AccessService *>::iterator iter;
-				iter = g_instList.begin();
+				std::map<unsigned long long, AccessService *>::iterator iter = g_instList.begin();
 				do {
 					AccessService * pService = iter->second;
 					if (pService) {
@@ -106,7 +105,7 @@ char * readItem(KVStringPair kvList, const char * pItem)
 	return NULL;
 }
 
-EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName)
+unsigned long long __stdcall EA_Start(const char * pCfgFileName)
 {
 	if (strlen(g_szDllDir)) {
 		char szFileName[256] = { 0 };
@@ -114,13 +113,15 @@ EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName)
 			strncpy_s(szFileName, sizeof(szFileName), pCfgFileName, strlen(pCfgFileName));
 		}
 		else {
-			snprintf(szFileName, sizeof(szFileName), "%sconf\\server.data", g_szDllDir);
+			sprintf_s(szFileName, sizeof(szFileName), "%sconf\\server.data", g_szDllDir);
 		}
 		KVStringPair kvList;
 		if (loadConf(szFileName, kvList) == 0) {
 			char * pZkHost = readItem(kvList, "zk_host");
 			char * pAccessHost = readItem(kvList, "access_ip");
 			char * pAccessPort = readItem(kvList, "access_port");
+			char * pTaskClosseCheckStatus = readItem(kvList, "task_close_check_status");
+			char * pTaskFleeReplicatedReport = readItem(kvList, "task_flee_replicated_report");
 			char * pMidwareHost = readItem(kvList, "midware_ip");
 			char * pMidwarePubPort = readItem(kvList, "publish_port");
 			char * pMidwareTalkPort = readItem(kvList, "talk_port");
@@ -134,6 +135,8 @@ EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName)
 			unsigned short usMidwareTalkPort = 0;
 			char szDbProxyHost[32] = { 0 };
 			unsigned short usDbProxyQryPort = 0;
+			int nTaskCloseCheckStatus = 0;
+			int nTaskFleeReplicatedReport = 0;
 			if (pZkHost) {
 				strncpy_s(szZkHost, sizeof(szZkHost), pZkHost, strlen(pZkHost));
 				free(pZkHost);
@@ -145,6 +148,16 @@ EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName)
 			if (pAccessPort) {
 				usAccessPort = (unsigned short)atoi(pAccessPort);
 				free(pAccessPort);
+			}
+			if (pTaskClosseCheckStatus) {
+				nTaskCloseCheckStatus = atoi(pTaskClosseCheckStatus);
+				free(pTaskClosseCheckStatus);
+				pTaskClosseCheckStatus = NULL;
+			}
+			if (pTaskFleeReplicatedReport) {
+				nTaskFleeReplicatedReport = atoi(pTaskFleeReplicatedReport);
+				free(pTaskFleeReplicatedReport);
+				pTaskFleeReplicatedReport = NULL;
 			}
 			if (pMidwareHost) {
 				strncpy_s(szMidwareHost, sizeof(szMidwareHost), pMidwareHost, strlen(pMidwareHost));
@@ -170,11 +183,13 @@ EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName)
 			if (pService) {
 				if (pService->StartAccessService(szAccessHost, usAccessPort, szMidwareHost, usMidwarePubPort, 
 					usMidwareTalkPort, szDbProxyHost, usDbProxyQryPort) == 0) {
-					unsigned int uiVal = (unsigned int)pService;
+					pService->SetParameter(access_service::E_PARAM_TASK_CLOSE_CHECK_STATUS, nTaskCloseCheckStatus);
+					pService->SetParameter(access_service::E_PARAM_TASK_FLEE_REPORT_REPLICATED, nTaskFleeReplicatedReport);
+					unsigned long long ullVal = (unsigned long long)pService;
 					pthread_mutex_lock(&g_mutex4InstList);
-					g_instList.insert(std::make_pair(uiVal, pService));
+					g_instList.insert(std::make_pair(ullVal, pService));
 					pthread_mutex_unlock(&g_mutex4InstList);
-					return uiVal;
+					return ullVal;
 				}
 				else {
 					delete pService;
@@ -186,12 +201,12 @@ EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName)
 	return 0;
 }
 
-EAAPI int __stdcall EA_Stop(unsigned int uiInst)
+int __stdcall EA_Stop(unsigned long long ullInst_)
 {
 	int result = -1;
 	pthread_mutex_lock(&g_mutex4InstList);
 	if (!g_instList.empty()) {
-		std::map<unsigned int, AccessService *>::iterator iter = g_instList.find(uiInst);
+		std::map<unsigned long long, AccessService *>::iterator iter = g_instList.find(ullInst_);
 		if (iter != g_instList.end()) {
 			AccessService * pService = iter->second;
 			if (pService) {
@@ -206,16 +221,16 @@ EAAPI int __stdcall EA_Stop(unsigned int uiInst)
 	return result;
 }
 
-EAAPI int __stdcall EA_SetLogType(unsigned int uiInst, int nLogType)
+int __stdcall EA_SetLogType(unsigned long long ullInst_, unsigned short usLogType_)
 {
 	int result = -1;
 	pthread_mutex_lock(&g_mutex4InstList);
 	if (!g_instList.empty()) {
-		std::map<unsigned int, AccessService *>::iterator iter = g_instList.find(uiInst);
+		std::map<unsigned long long, AccessService *>::iterator iter = g_instList.find(ullInst_);
 		if (iter != g_instList.end()) {
 			AccessService * pService = iter->second;
 			if (pService) {
-				pService->SetLogType(nLogType);
+				pService->SetLogType(usLogType_);
 				result = 0;
 			}
 		}
@@ -224,12 +239,12 @@ EAAPI int __stdcall EA_SetLogType(unsigned int uiInst, int nLogType)
 	return result;
 }
 
-EAAPI int __stdcall EA_GetStatus(unsigned int uiInst)
+int __stdcall EA_GetStatus(unsigned long long ullInst_)
 {
 	int result = -1;
 	pthread_mutex_lock(&g_mutex4InstList);
 	if (!g_instList.empty()) {
-		std::map<unsigned int, AccessService *>::iterator iter = g_instList.find(uiInst);
+		std::map<unsigned long long, AccessService *>::iterator iter = g_instList.find(ullInst_);
 		if (iter != g_instList.end()) {
 			AccessService * pService = iter->second;
 			result = pService->GetStatus();

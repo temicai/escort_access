@@ -5,16 +5,10 @@
 extern "C"
 {
 #endif 
-
-#ifdef DLL_IMPORT
-#define EAAPI __declspec(dllimport)
-#else 
-#define EAAPI __declspec(dllexport)
-#endif
-	EAAPI unsigned int __stdcall EA_Start(const char * pCfgFileName = 0);
-	EAAPI int __stdcall EA_Stop(unsigned int);
-	EAAPI int __stdcall EA_SetLogType(unsigned int, int);
-	EAAPI int __stdcall EA_GetStatus(unsigned int);
+	unsigned long long __stdcall EA_Start(const char * pCfgFileName = 0);
+	int __stdcall EA_Stop(unsigned long long);
+	int __stdcall EA_SetLogType(unsigned long long, unsigned short);
+	int __stdcall EA_GetStatus(unsigned long long);
 
 #ifdef __cplusplus
 }

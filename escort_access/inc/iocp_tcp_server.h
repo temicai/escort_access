@@ -1,30 +1,45 @@
-#ifndef IOCP_TCP_SERVER_CDEB7879_85C4_4256_8438_AC752950BC52_H
-#define IOCP_TCP_SERVER_CDEB7879_85C4_4256_8438_AC752950BC52_H
+#ifndef IOCP_TCP_SERVER_H_5E64EEE213C140A6A367B660325BF0AA
+#define IOCP_TCP_SERVER_H_5E64EEE213C140A6A367B660325BF0AA
 
-#include "iocp_common_define.h"
+#include "tcp_common.h"
 
-extern "C"
-{
-#ifndef SERV_API 
-#define SERV_API extern "C" __declspec(dllexport)
-#endif
-}
-
-#ifndef NULL
-#define NULL 0
-#endif
+#define MAX_PARALLEL_INSTANCE_NUM 64
 
 extern "C"
 {
-	/*SERV_API*/ unsigned int __stdcall TS_StartServer(unsigned int uiPort, int nLogType, fMessageCallback fMsgCb,
-		void * pUserData, int nIdleLimit = 2);
-	/*SERV_API*/ int __stdcall TS_StopServer(unsigned int uiServerInst);
-	/*SERV_API*/ int __stdcall TS_SetLogType(unsigned int uiServerInst, int nLogType);
-	/*SERV_API*/ int __stdcall TS_SendData(unsigned int uiServerInst, const char * szEndPoit, const char * pData,
-		unsigned long ulDataLen);
-	/*SERV_API*/ int __stdcall TS_GetPort(unsigned int uiServerInst, unsigned int & uiPort);
-	/*SERV_API*/ int __stdcall TS_SetMessageCallback(unsigned int uiServerInst, fMessageCallback fMsgCb, void * pUserData);
-	int __stdcall TS_CloseEndpoint(unsigned int uiServerInst, const char * szEndpoint);
-}
+	unsigned long long __stdcall TS_StartServer(
+		unsigned short usPort,
+		fMessageCallback fMsgCb,
+		void * pUserData,
+		int nIdleTime
+	);
+	int __stdcall TS_StopServer(
+		unsigned long long ullInst
+	);
+	int __stdcall TS_SendData(
+		unsigned long long ullInst,
+		const char * pEndpoint,
+		const char * pData,
+		unsigned int uiDataLen
+	);
+	int __stdcall TS_SetMessageCallback(
+		unsigned long long ullInst,
+		fMessageCallback fMsgCb,
+		void * pUserData
+	);
+	int __stdcall TS_CloseEndpoint(
+		unsigned long long ullInst,
+		const char * pEndpoint
+	);
+	int __stdcall TS_GetPort(
+		unsigned long long ullInst,
+		unsigned short & usPort
+	);
+	int __stdcall TS_SetLogType(
+		unsigned long long ullInst,
+		unsigned short usLogType
+	);
 
+
+}
 #endif
