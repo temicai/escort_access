@@ -52,7 +52,7 @@ int main(int argc, char ** argv)
 //		while (!cfgFile.eof()) {
 //			cfgFile.getline(buffer, 256, '\n');
 //			std::string str = buffer;
-//			if (str[0] == '#') { //×¢ÊÍÐÐ
+//			if (str[0] == '#') { //×¢ï¿½ï¿½ï¿½ï¿½
 //				continue;
 //			}
 //			size_t n = str.find_first_of('=');

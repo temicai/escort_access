@@ -5,11 +5,16 @@
 #include <WinSock2.h>
 #include <queue>
 #include <map>
+#include <set>
 #include <string>
+#include <random>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 #define _TIMESPEC_DEFINED
 #include "pthread.h"
-#include "pfLog.hh"
+#include "pf_log.h"
 #include "zmq.h"
 #include "czmq.h"
 #include "document.h" //rapidjson
@@ -19,29 +24,19 @@
 #include "zk_escort.h"
 #include "escort_common.h"
 #include "escort_error.h"
-#include "EscortDbCommon.h"
 
 const char gSecret = '8';
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "pthreadVC2.lib")
-#pragma comment(lib, "pfLog.lib")
+#pragma comment(lib, "pf_log.lib")
 #pragma comment(lib, "libzmq.lib")
-#pragma comment(lib, "czmq.lib")
+#pragma comment(lib, "libczmq.lib")
 
-#define USE_VPN 1
-
-#if USE_VPN
-#include "tcp_server.h"
-#pragma comment(lib, "tcp_server.lib")
-#else
-#include "iocp_tcp_server.h"
-#pragma comment(lib, "iocp_tcp_server.lib")
-#endif
+#include "tcp_common.h"
 
 #pragma comment(lib, "zookeeper.lib")
 #pragma comment(lib, "libsodium.lib")
-
 
 namespace access_service
 {
@@ -73,7 +68,7 @@ namespace access_service
 		E_CMD_BIND_REPLY = 103,
 		E_CMD_UNBIND_REPLY = 104,
 		E_CMD_TASK_REPLY = 105,
-		E_CMD_TAKK_CLOSE_REPLY = 106,
+		E_CMD_TASK_CLOSE_REPLY = 106,
 		E_CMD_POSITION_REPLY = 107,
 		E_CMD_FLEE_REPLY = 108,
 		E_CMD_FLEE_REVOKE_REPLY = 109,
@@ -95,14 +90,15 @@ namespace access_service
 
 	enum eAppNotifyMessageType
 	{
-		E_ALARM_DEVICE_LOWPOWER = 1,
-		E_ALARM_DEVICE_LOOSE = 2,
-		E_NOTIFY_DEVICE_POSITION = 3,
-		E_NOTIFY_DEVICE_ONLINE = 4,
+		E_ALARM_DEVICE_LOWPOWER = 1,     //deprecated
+		E_ALARM_DEVICE_LOOSE = 2,        //deprecated
+		E_NOTIFY_DEVICE_POSITION = 3, 
+		E_NOTIFY_DEVICE_ONLINE = 4,      //deprecated
 		E_NOTIFY_DEVICE_OFFLINE = 5,
-		E_NOTIFY_DEVICE_BATTERY = 6,
+		E_NOTIFY_DEVICE_BATTERY = 6,     //deprecated
 		E_NOTIFY_DEVICE_LOCATE_LOST = 7,
 		E_ALARM_DEVICE_FENCE = 8,
+		E_NOTIFY_DEVICE_INFO = 10,
 	};
 
 	enum eDeviceCommand 
@@ -126,30 +122,17 @@ namespace access_service
 		E_PARAM_LOGTYPE = 1, 
 		E_PARAM_TASK_CLOSE_CHECK_STATUS = 2,
 		E_PARAM_TASK_FLEE_REPORT_REPLICATED = 3,
+		E_PARAM_ENABLE_TASK_LOOSE_CHECK = 4,
 	};
 
-	typedef struct tagLogContext
+	enum eAccessMessageType
 	{
-		char * pLogData;
-		unsigned int uiDataLen;
-		unsigned short usLogCategory;
-		unsigned short usLogType;
-		tagLogContext()
-		{
-			uiDataLen = 0;
-			pLogData = NULL;
-			usLogCategory = 0;
-			usLogType = 0;
-		}
-		~tagLogContext()
-		{
-			if (uiDataLen && pLogData) {
-				free(pLogData);
-				pLogData = NULL;
-				uiDataLen = 0;
-			}
-		}
-	} LogContext;
+		E_ACC_DATA_TRANSFER = 1,
+		E_ACC_KEEP_ALIVE = 2,
+		E_ACC_DATA_DISPATCH = 3,
+		E_ACC_LINK_STATUS = 4,
+		E_ACC_APP_EXPRESS = 5,
+	};
 
 	typedef struct tagAppMessageHead
 	{
@@ -185,7 +168,7 @@ namespace access_service
 		unsigned int uiReqSeq;
 		char szUser[20];
 		char szPasswd[64];
-		char szDateTime[16];
+		char szDateTime[20];
 		char szHandset[64];
 		tagAppLogin()
 		{
@@ -357,10 +340,11 @@ namespace access_service
 		char szQryDatetime[16];
 		tagAppQueryPerson()
 		{
-			szSession[0] = '\0';
-			szQryPersonId[0] = '\0';
-			szQryDatetime[0] = '\0';
+			memset(szSession, 0, sizeof(szSession));
+			memset(szQryPersonId, 0, sizeof(szQryPersonId));
+			memset(szQryDatetime, 0, sizeof(szQryDatetime));
 			uiQeurySeq = 0;
+			nQryMode = 0;
 		}
 	} AppQueryPerson;
 
@@ -371,8 +355,8 @@ namespace access_service
 		unsigned int uiQrySeq;
 		tagAppQueryTaskList()
 		{
-			szOrgId[0] = '\0';
-			szDatetime[0] = '\0';
+			memset(szOrgId, 0, sizeof(szOrgId));
+			memset(szDatetime, 0, sizeof(szDatetime));
 			uiQrySeq = 0;
 		}
 	} AppQueryTaskList;
@@ -384,7 +368,7 @@ namespace access_service
     char szDeviceId[16];
     char szDatetime[20];
     unsigned int uiQrySeq;
-    tagAppQueryDeviceStatus()
+    tagAppQueryDeviceStatus() noexcept
     {
       szSession[0] = '\0';
       szFactoryId[0] = '\0';
@@ -404,13 +388,12 @@ namespace access_service
 		char szOrg[40];
 		char szTaskId[16];
 		char szHandset[64];
-		int nActivated;//0:false, 1:true
-		int nNotifyBattery : 8;
-		int nNotifyStatus : 8;
-		int nNotifyPosition : 8;
-		int nNotifyOnline : 8;
+		int nActivated : 16;//0:false, 1:true
+		int nLinkFormat : 16;
+		int nNotifyStatus : 16;
+		int nNotifyOffline : 16;
 		unsigned long long ulActivateTime;
-		tagAppLinkInfo()
+		tagAppLinkInfo() noexcept
 		{
 			szSession[0] = '\0';
 			szGuarder[0] = '\0';
@@ -422,10 +405,8 @@ namespace access_service
 			szHandset[0] = '\0';
 			nActivated = 0;
 			ulActivateTime = 0;
-			nNotifyBattery = 0;
 			nNotifyStatus = 0;
-			nNotifyPosition = 0;
-			nNotifyOnline = 0;
+			nNotifyOffline = 0;
 		}
 	} AppLinkInfo;
 
@@ -434,27 +415,88 @@ namespace access_service
 		char szSubFilter[64];
 		char szSession[20];
 		char szGuarder[20];
-		char szEndpoint[40];
-		tagSubscribeInfo()
+		char szEndpoint[32];
+		char szAccSource[40];
+		int nFormat;
+		tagSubscribeInfo() noexcept
 		{
-			szSubFilter[0] = '\0';
-			szSession[0] = '\0';
-			szGuarder[0] = '\0';
-			szEndpoint[0] = '\0';
+			memset(szSubFilter, 0, sizeof(szSubFilter));
+			memset(szSession, 0, sizeof(szSession));
+			memset(szGuarder, 0, sizeof(szGuarder));
+			memset(szEndpoint, 0, sizeof(szEndpoint));
+			memset(szAccSource, 0, sizeof(szAccSource));
+			nFormat = 0;
 		}
 	} AppSubscribeInfo;
 
 	typedef struct tagRemoteLinkInfo
 	{
 		int nActive; //0-false,1-true
+		int nSendKeepAlive;
 		unsigned long long ulLastActiveTime; //default 0
-		tagRemoteLinkInfo()
+		tagRemoteLinkInfo() noexcept
 		{
 			nActive = 0;
+			nSendKeepAlive = 0;
 			ulLastActiveTime = 0;
 		}
 	} RemoteLinkInfo;
+
+	typedef struct tagDisconnectEvent
+	{
+		char szEndpoint[32];
+		char szEventTime[20];
+	} DisconnectEvent;
+
+	typedef struct tagAccessAppMessage
+	{
+		char szAccessFrom[40];
+		char szMsgFrom[32];
+		unsigned char * pMsgData;
+		unsigned int uiMsgDataLen;
+		unsigned long long ullMsgTime;
+	} AccessAppMessage;
+
+	typedef struct tagAccessClientInfo
+	{
+		char szAccClientId[40];
+		unsigned long long ullLastActivatedTime;
+		std::set<std::string> proxySet;
+		tagAccessClientInfo()
+		{
+			memset(szAccClientId, 0, sizeof(szAccClientId));
+			ullLastActivatedTime = 0;
+		}
+	} AccessClientInfo;
+
+	typedef struct tagClientExpressMessage
+	{
+		char szClientId[40];
+		unsigned int uiExpressDataLen;
+		unsigned char * pExpressData;
+		unsigned long long ullMessageTime;
+		tagClientExpressMessage() noexcept
+		{
+			memset(szClientId, 0, sizeof(szClientId));
+			uiExpressDataLen = 0;
+			ullMessageTime = 0;
+			pExpressData = NULL;
+		}
+	} ClientExpressMessage;
+
+	typedef struct tagQueryPerson
+	{
+		unsigned int uiQrySeq;
+		unsigned short usFormat;
+		unsigned short usReverse;
+		char szSession[20];
+		char szLink[40];
+		char szEndpoint[32];
+	} QueryPersonEvent;
+
 }
+
+using namespace escort;
 
 //part1: connect and deal with app
 //part2: connect and deal with msg-midware
@@ -464,41 +506,53 @@ class AccessService
 public:
 	AccessService(const char * pZkHost, const char * pRoot);
 	~AccessService();
-	int StartAccessService(const char * pHost, unsigned short usServicePort, const char * pMidwareHost,
-		unsigned short usPublishPort, unsigned short usContactPort, const char * pDbProxyHost,
-		unsigned short usQueryPort);
-	int StopAccessService();
+	int StartAccessService_v2(const char * pAccHost, unsigned short usAccPort, const char * pMsgHost, 
+		unsigned short usMsgPort, unsigned short usInteractPort);
+	int StopAccessService_v2();
 	void SetLogType(unsigned short usLogType);
 	int GetStatus();
 	void SetParameter(int nParamType, int nParamValue);
 protected:
 	void initLog();
-	bool addLog(access_service::LogContext * pLog);
-	void writeLog(const char * pLogContent, unsigned short usLogCategoryType, unsigned short usLogType);
-	void dealLog();
-
 	bool addAppMsg(MessageContent * pMsg);
 	void dealAppMsg();
 	void parseAppMsg(MessageContent * pMsg);
+	bool addAccAppMsg(access_service::AccessAppMessage *);
+	void dealAccAppMsg();
+	void parseAccAppMsg(access_service::AccessAppMessage *);
 	int getWholeMessage(const unsigned char * pData, unsigned int uiDataLen, unsigned int uiIndex, 
 		unsigned int & uiBeginIndex, unsigned int & uiEndIndex, unsigned int & uiUnitLen);
 	void decryptMessage(unsigned char * pData, unsigned int uiBeginIndex, unsigned int ulEndIndex);
 	void encryptMessage(unsigned char * pData, unsigned int uiBeginIndex, unsigned int ulEndIndex);
-	void handleAppLogin(access_service::AppLoginInfo loginInfo, const char *, unsigned long long);
-	void handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char *, unsigned long long);
-	void handleAppBind(access_service::AppBindInfo bindInfo, const char *, unsigned long long);
-	void handleAppSubmitTask(access_service::AppSubmitTaskInfo taskInfo, const char *, unsigned long long);
-	void handleAppCloseTask(access_service::AppCloseTaskInfo taskInfo, const char *, unsigned long long);
-	void handleAppPosition(access_service::AppPositionInfo positionInfo, const char *, unsigned long long);
-	void handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, const char *, unsigned long long);
-	void handleAppKeepAlive(access_service::AppKeepAlive keepAlive, const char *, unsigned long long);
+	void handleAppLogin(access_service::AppLoginInfo loginInfo, const char * pMsgFrom, unsigned long long ullMsgTime, 
+		const char * pClientId);
+	void handleAppLoginV2(access_service::AppLoginInfo * pLoginInfo, const char * pMsgFrom, const char * pClientId,
+		unsigned long long ullMsgTime);
+	void handleAppLogout(access_service::AppLogoutInfo logoutInfo, const char * pMsgFrom, unsigned long long ullMsgTime, 
+		const char * pClientId);
+	void handleAppBind(access_service::AppBindInfo bindInfo, const char * pMsgFrom, unsigned long long ullMsgTime, 
+		const char * pClientId);
+	void handleAppBindV2(access_service::AppBindInfo * pBindInfo, const char * pMsgFrom, const char * pClientId,
+		unsigned long long ullMsgTime);
+	void handleAppUnbindV2(access_service::AppBindInfo * pUnbindInfo, const char * pMsgFrom, const char * pClientId,
+		unsigned long long ullMsgTime);
+	void handleAppSubmitTask(access_service::AppSubmitTaskInfo taskInfo, const char *, unsigned long long, const char *);
+	void handleAppSubmitTaskV2(access_service::AppSubmitTaskInfo * pTaskInfo, const char * pEndpoint, const char * pClientId,
+		unsigned long long ullMsgTime);
+	void handleAppCloseTask(access_service::AppCloseTaskInfo taskInfo, const char *, unsigned long long, const char *);
+	void handleAppCloseTaskV2(access_service::AppCloseTaskInfo * pTaskInfo, const char * pEndpoint, const char * pClientId,
+		unsigned long long ullMsgTime);
+	void handleAppPosition(access_service::AppPositionInfo positionInfo, const char *, unsigned long long, const char *);
+	void handleAppFlee(access_service::AppSubmitFleeInfo fleeInfo, const char *, unsigned long long, const char *);
+	void handleAppKeepAlive(access_service::AppKeepAlive * keepAlive, const char *, unsigned long long, const char *);
 	void handleAppModifyAccountPassword(access_service::AppModifyPassword modifyPasswd, const char *, 
-		unsigned long long);
-	void handleAppQueryTask(access_service::AppQueryTask queryTask, const char *, unsigned long long);
-	void handleAppDeviceCommand(access_service::AppDeviceCommandInfo cmdInfo, const char *);
-	void handleAppQueryPerson(access_service::AppQueryPerson queryPerson, const char *);
-	void handleAppQueryTaskList(access_service::AppQueryTaskList * pQryTaskList, const char *);
-  void handleAppQueryDeviceStatus(access_service::AppQueryDeviceStatus *, const char *);
+		unsigned long long, const char *);
+	void handleAppQueryTask(access_service::AppQueryTask queryTask, const char *, unsigned long long, const char *);
+	void handleAppDeviceCommand(access_service::AppDeviceCommandInfo cmdInfo, const char *, const char *);
+	void handleAppQueryPerson(access_service::AppQueryPerson queryPerson, const char *, const char *);
+	void handleAppQueryTaskList(access_service::AppQueryTaskList * pQryTaskList, const char *, const char *);
+  void handleAppQueryDeviceStatus(access_service::AppQueryDeviceStatus *, const char *, const char *);
+
 	unsigned int getNextRequestSequence();
 	int generateSession(char * pSession, size_t nSize);
 	void generateTaskId(char * pTaskId, size_t nSize);
@@ -508,9 +562,9 @@ protected:
 	void storeTopicMsg(const TopicMessage * pMsg);
 	bool addInteractionMsg(InteractionMessage * pMsg);
 	void dealInteractionMsg();
-	int handleTopicAliveMsg(TopicAliveMessage * pMsg, const char *);
-	int handleTopicOnlineMsg(TopicOnlineMessage * pMsg, const char *);
-	int handleTopicOfflineMsg(TopicOfflineMessage * pMsg, const char *);
+	int handleTopicDeviceAliveMsg(TopicAliveMessage * pMsg, const char * pTopic);
+	int handleTopicDeviceOnlineMsg(TopicOnlineMessage * pMsg, const char *);
+	int handleTopicDeviceOfflineMsg(TopicOfflineMessage * pMsg, const char *);
 	int handleTopicLocateGpsMsg(TopicLocateMessageGps * pMsg, const char *);
 	int handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const char *);
 	int handleTopicAlarmLowpowerMsg(TopicAlarmMessageLowpower * pMsg, const char *);
@@ -522,9 +576,11 @@ protected:
 	int handleTopicTaskSubmitMsg(TopicTaskMessage * pMsg, const char *);
 	int handleTopicTaskModifyMsg(TopicTaskModifyMessage * pMsg, const char *);
 	int handleTopicTaskCloseMsg(TopicTaskCloseMessage * pMsg, const char *);
-	int handleTopicLoginMsg(TopicLoginMessage * pMsg, const char *);
-	int handleTopicLogoutMsg(TopicLogoutMessage * pMsg, const char *);
-	
+	int handleTopicUserLoginMsg(TopicLoginMessage * pMsg, const char *);
+	int handleTopicUserLogoutMsg(TopicLogoutMessage * pMsg, const char *);
+	int handleTopicUserAliveMsg(escort::TopicUserAliveMessage * pMsg, const char *);
+	int handleTopicDeviceChargeMsg(TopicDeviceChargeMessage * pMsg, const char * pTopic);
+
 	void initZookeeper();
 	int competeForMaster();
 	void masterExist();
@@ -540,34 +596,163 @@ protected:
 	bool getLoadSessionFlag();
 	void setLoadSessionFlag(bool);
 
-	int sendDatatoEndpoint(const char * pData, size_t nDataLen, const char * pEndpoint);
-	int sendDataViaInteractor(const char * pData, size_t nDataLen);
+	int sendDatatoEndpoint(char * pData, uint32_t nDataLen, const char * pEndpoint);
+	int sendDataToEndpoint_v2(char * pData, uint32_t nDataLen, const char * pEndpoint, 
+		uint32_t nDataType, const char * pFrom);
+	int sendDataViaInteractor_v2(const char * pData, uint32_t nDataLen);
 		
-	void dealNetwork();
 	void handleLinkDisconnect(const char * pEndpoint, const char * pUser, bool bFlag = true);
-	
-	void readDataBuffer();
-	void verifyLinkList();
-	bool verifyLink(const char * pEndpoint);
 	void loadOrgList(bool flag = false);
-	//void addElement(std::set<std::string> & list, std::string element);
 	void findOrgChild(std::string strOrgId, std::set<std::string> & childList);
+	char * ansiToUtf8(const char *);
+	char * utf8ToAnsi(const char *);
+	unsigned long long makeDatetime(const char *);
+	void formatDatetime(unsigned long long, char *, size_t);
+
+	void getOrgList()
+	{
+		char szDatetime[20] = { 0 };
+		formatDatetime(time(NULL), szDatetime, sizeof(szDatetime));
+		char szOrgMsg[256] = { 0 };
+		sprintf_s(szOrgMsg, sizeof(szOrgMsg), "{\"mark\":\"EC\",\"version\":\"10\",\"type\":%d,\"sequence\":%d,"
+			"\"datetime\":\"%s\",\"getType\":%d,\"param1\":\"\",\"param2\":\"\",\"param3\":0,\"param4\":0}",
+			MSG_SUB_GETINFO, getNextRequestSequence(), szDatetime, BUFFER_ORG);
+		sendDataViaInteractor_v2(szOrgMsg, (uint32_t)strlen(szOrgMsg));
+	}
+	void getDeviceList()
+	{
+		char szDatetime[20] = { 0 };
+		formatDatetime(time(NULL), szDatetime, sizeof(szDatetime));
+		char szDevMsg[256] = { 0 };
+		sprintf_s(szDevMsg, sizeof(szDevMsg), "{\"mark\":\"EC\",\"version\":\"10\",\"type\":%d,\"sequence\":%d,"
+			"\"datetime\":\"%s\",\"getType\":%d,\"param1\":\"\",\"param2\":\"\",\"param3\":0,\"param4\":0}",
+			MSG_SUB_GETINFO, getNextRequestSequence(), szDatetime, BUFFER_DEVICE);
+		sendDataViaInteractor_v2(szDevMsg, (uint32_t)strlen(szDevMsg));
+	}
+	void getUserList()
+	{
+		char szDatetime[20] = { 0 };
+		formatDatetime(time(NULL), szDatetime, sizeof(szDatetime));
+		char szUserMsg[256] = { 0 };
+		sprintf_s(szUserMsg, sizeof(szUserMsg), "{\"mark\":\"EC\",\"version\":\"10\",\"type\":%d,\"sequence\":%d,"
+			"\"datetime\":\"%s\",\"getType\":%d,\"param1\":\"\",\"param2\":\"\",\"param3\":0,\"param4\":0}",
+			MSG_SUB_GETINFO, getNextRequestSequence(), szDatetime, BUFFER_GUARDER);
+		sendDataViaInteractor_v2(szUserMsg, (uint32_t)strlen(szUserMsg));
+	}
+	void getTaskList()
+	{
+		char szDatetime[20] = { 0 };
+		formatDatetime(time(NULL), szDatetime, sizeof(szDatetime));
+		char szTaskMsg[256] = { 0 };
+		sprintf_s(szTaskMsg, sizeof(szTaskMsg), "{\"mark\":\"EC\",\"version\":\"10\",\"type\":%d,\"sequence\":%d,"
+			"\"datetime\":\"%s\",\"getType\":%d,\"param1\":\"\",\"param2\":\"\",\"param3\":0,\"param4\":0}",
+			MSG_SUB_GETINFO, getNextRequestSequence(), szDatetime, BUFFER_TASK);
+		sendDataViaInteractor_v2(szTaskMsg, (uint32_t)strlen(szTaskMsg));
+	}
+	void setLoadOrg(bool bValue_)
+	{
+		pthread_mutex_lock(&g_mutex4LoadOrg);
+		g_bLoadOrg = bValue_;
+		pthread_mutex_unlock(&g_mutex4LoadOrg);
+	}
+	bool getLoadOrg()
+	{
+		bool result = false;
+		pthread_mutex_lock(&g_mutex4LoadOrg);
+		result = g_bLoadOrg;
+		pthread_mutex_unlock(&g_mutex4LoadOrg);
+		return result;
+	}
+	void setLoadDevice(bool bValue_)
+	{
+		pthread_mutex_lock(&g_mutex4DevList);
+		g_bLoadDevice = bValue_;
+		pthread_mutex_unlock(&g_mutex4DevList);
+	}
+	bool getLoadDevice()
+	{
+		bool result = false;
+		pthread_mutex_lock(&g_mutex4LoadDevice);
+		result = g_bLoadDevice;
+		pthread_mutex_unlock(&g_mutex4LoadDevice);
+		return result;
+	}
+	void setLoadUser(bool bValue_) 
+	{
+		pthread_mutex_lock(&g_mutex4LoadUser);
+		g_bLoadUser = bValue_;
+		pthread_mutex_unlock(&g_mutex4LoadUser);
+	}
+	bool getLoadUser()
+	{
+		bool result = false;
+		pthread_mutex_lock(&g_mutex4LoadUser);
+		result = g_bLoadUser;
+		pthread_mutex_unlock(&g_mutex4LoadUser);
+		return result;
+	}
+	void setLoadTask(bool bValue_)
+	{
+		pthread_mutex_lock(&g_mutex4TaskList);
+		g_bLoadTask = bValue_;
+		pthread_mutex_unlock(&g_mutex4TaskList);
+	}
+	bool getLoadTask()
+	{
+		bool result = false;
+		pthread_mutex_lock(&g_mutex4TaskList);
+		result = g_bLoadTask;
+		pthread_mutex_unlock(&g_mutex4TaskList);
+		return result;
+	}
+	bool addDisconnectEvent(const char *, const char *);
+	void handleDisconnectEvent();
+	void checkAccClientList();
+	void updateAccClient(const char *, const char *);
+	void checkAppLinkList();
+	void sendInteractAlive();
+
+	bool addExpressMessage(access_service::ClientExpressMessage *);
+	void dealExpressMessage();
+	void parseExpressMessage(const access_service::ClientExpressMessage *);
+	void sendExpressMessageToClient(const char * pMessage, const char * pClientId);
+	void handleExpressAppLogin(access_service::AppLoginInfo *, unsigned long long ullMsgTime, const char * pClientId);
+	void handleExpressAppLogout(access_service::AppLogoutInfo *, unsigned long long ullMsgTime, const char * pClientId);
+	void handleExpressAppBind(access_service::AppBindInfo *, unsigned long long ullMsgTime, const char * pClientId);
+	void handleExpressAppSubmitTask(access_service::AppSubmitTaskInfo *, unsigned long long, const char *);
+	void handleExpressAppCloseTask(access_service::AppCloseTaskInfo *, unsigned long long, const char *);
+	void handleExpressAppPosition(access_service::AppPositionInfo *, unsigned long long, const char *);
+	void handleExpressAppFlee(access_service::AppSubmitFleeInfo *, unsigned long long, const char *);
+	void handleExpressAppKeepAlive(access_service::AppKeepAlive *, unsigned long long, const char *);
+	void handleExpressAppModifyAccountPassword(access_service::AppModifyPassword *, unsigned long long, const char *);
+	void handleExpressAppQueryTask(access_service::AppQueryTask *, unsigned long long, const char *);
+	void handleExpressAppDeviceCommand(access_service::AppDeviceCommandInfo *, const char *);
+	void handleExpressAppQueryPerson(access_service::AppQueryPerson *, const char *);
+	void handleExpressAppQueryTaskList(access_service::AppQueryTaskList *, const char *);
+	void handleExpressAppQueryDeviceStatus(access_service::AppQueryDeviceStatus *, const char *);
 
 	friend void * dealAppMsgThread(void *);
 	friend void * dealTopicMsgThread(void *);
 	friend void * dealInteractionMsgThread(void *);
-	friend void * dealNetworkThread(void *);
-	friend void * dealLogThread(void *);
+	friend void dealExpressMsgThread(void *);
+	friend void loadSessionThread(void *);
+	friend void dealDisconnectEventThread(void *);
+	friend void dealAppAccMsgThread(void *);
 	
+	friend int readAccInteract(zloop_t *, zsock_t *, void *);
+	friend int readMsgSubscriber(zloop_t *, zsock_t *, void *);
+	friend int readMsgInteractor(zloop_t *, zsock_t *, void *);
+	friend int timerCb(zloop_t*, int, void *);
+
 	//friend void * deal
 	friend void * superviseThread(void *);
-	friend int supervise(zloop_t * loop, int timer_id, void * arg);
-	friend void __stdcall fMsgCb(int nType, void * pMsg, void * pUserData);
+	//friend void __stdcall fMsgCb(int nType, void * pMsg, void * pUserData);
 	friend void zk_server_watcher(zhandle_t * zh, int type, int state, const char * path, void * watcherCtx);
 	friend void zk_escort_create_completion(int rc, const char * name, const void * data);
 	friend void zk_access_create_completion(int rc, const char * name, const void * data);
 	friend void zk_access_master_create_completion(int rc, const char * name, const void * data);
-	friend void zk_access_master_exists_watcher(zhandle_t * zh, int type, int state, const char * path, void * watcherCtx);
+	friend void zk_access_master_exists_watcher(zhandle_t * zh, int type, int state, 
+		const char * path, void * watcherCtx);
 	friend void zk_access_master_exists_completion(int rc, const Stat * stat, const void * data);
 	friend void zk_access_set_completion(int rc, const struct Stat * stat, const void * data);
 	friend void zk_access_slaver_create_completion(int rc, const char * name, const void * data);
@@ -577,43 +762,45 @@ protected:
 	friend void zk_session_child_create_completion(int rc, const char * name, const void * data);
 	friend void zk_session_child_set_completion(int rc, const struct Stat * stat, const void * data);
 private:
-
 	unsigned long long m_ullSrvInst;
-
 	int m_nRun;
 	unsigned short m_usSrvPort;
 	int m_nTaskCloseCheckStatus;
 	int m_nTaskFleeReplicatedReport;
+	int m_nEnableTaskLooseCheck;
 	
-	pthread_t m_pthdLog;
-	pthread_mutex_t m_mutex4LogQueue;
-	pthread_cond_t m_cond4LogQueue;
-	std::queue<access_service::LogContext *> m_logQueue;
 	unsigned short m_usLogType;
 	unsigned long long m_ullLogInst;
 	char m_szLogRoot[256];
 	
-	zctx_t * m_ctx;
-	void * m_subscriber;
-	void * m_interactor;
 	char m_szInteractorIdentity[40];
-	void * m_seeker;
 	char m_szSeekerIdentity[40];
-	pthread_t m_pthdNetwork;
 
+	zsock_t * m_accessSock;
+	zsock_t * m_subscriberSock;
+	zsock_t * m_interactorSock;
 	zhandle_t * m_zkHandle;
 	char m_szHost[512];
 	char m_zkNodePath[256];
 	bool m_bConnectZk; 
 	ZkAccess m_zkAccess;
+	ZkMidware m_zkMidware;
+	std::mutex m_mutex4AccessSock;
 
 	//message from app
 	pthread_mutex_t m_mutex4AppMsgQueue;
 	pthread_cond_t m_cond4AppMsgQueue;
 	std::queue<MessageContent *> m_appMsgQueue;
+	
+	std::mutex m_mutex4AccAppMsgQue;
+	std::condition_variable m_cond4AccAppMsgQue;
+	std::queue<access_service::AccessAppMessage *> m_accAppMsgQue;
+	std::thread m_thdAccAppMsg;
+
 	pthread_t m_pthdAppMsg;
 	pthread_mutex_t m_mutex4LinkDataList;
-	std::map<std::string, access_service::LinkDataInfo *> m_linkDataList; //key:linkId 
+	typedef std::map<std::string, access_service::LinkDataInfo *> LinkDataList;
+	LinkDataList m_linkDataList; //key:linkId 
 	
 	pthread_mutex_t m_mutex4LinkList; 
 	zhash_t * m_linkList; //key: session, value: AppLinkInfo *
@@ -641,6 +828,27 @@ private:
 	std::queue<TopicMessage *> m_topicMsgQueue;
 	std::queue<InteractionMessage *> m_interactionMsgQueue;
 
+	std::mutex m_mutex4LoadSessionSignal;
+	std::condition_variable m_cond4LoadSessionSignal;
+	std::thread m_thdLoadSession;
+	std::queue<access_service::DisconnectEvent *> m_disconnEventQue;
+	std::mutex m_mutex4DisconnEventQue;
+	std::condition_variable m_cond4DissconnEventQue;
+	std::thread m_thdDissconnEvent;
+
+	std::mutex m_mutex4AccClientList;
+	typedef std::map<std::string, access_service::AccessClientInfo *> AccessClientList;
+	AccessClientList m_accClientList;
+
+	std::queue<access_service::ClientExpressMessage *> m_cltExpressMsgQue;
+	std::mutex m_mutex4CltExpressMsgQue;
+	std::condition_variable m_cond4CltExpressMsgQue;
+	std::thread m_thdHandleExpressMsg;
+
+	typedef std::map<unsigned int, access_service::QueryPersonEvent *> QueryPersonEventList;
+	QueryPersonEventList m_qryPersonEventList;
+	std::mutex m_mutex4QryPersonEventList;
+	
 	static unsigned int g_uiRequestSequence;
 	static int g_nRefCount;
 	static pthread_mutex_t g_mutex4RequestSequence;
@@ -652,14 +860,18 @@ private:
 	static pthread_mutex_t g_mutex4DevList;
 	static zhash_t * g_taskList; //key: taskId , unfinish|executing tasks
 	static pthread_mutex_t g_mutex4TaskList; 
-	static std::map<std::string, OrganizationEx *> g_orgList2;
+	typedef std::map<std::string, OrganizationEx *> OrgList;
+	static OrgList g_orgList2;
 	static pthread_mutex_t g_mutex4OrgList;
 	static BOOL g_bInitBuffer;
-
+	static pthread_mutex_t g_mutex4LoadOrg;
+	static pthread_mutex_t g_mutex4LoadUser;
+	static pthread_mutex_t g_mutex4LoadDevice;
+	static pthread_mutex_t g_mutex4LoadTask;
+	static bool g_bLoadOrg;
+	static bool g_bLoadUser;
+	static bool g_bLoadDevice;
+	static bool g_bLoadTask;
 };
-
-
-
-
 
 #endif

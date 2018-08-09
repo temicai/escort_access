@@ -319,7 +319,7 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"新世纪花园\",\"target\":\"35529120010131&王小二\","
+					"\"destination\":\"dest\",\"target\":\"35529120010221131&gggg\","
 					"\"datetime\":\"%s\"}", 
 					szSession, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
@@ -454,7 +454,7 @@ void send_func(SOCKET sock)
 		}
 		else if (c == '5') {
 			char szMsg[256] = { 0 };
-			snprintf(szMsg, sizeof(szMsg), "{\"cmd\":15,\"session\":\"%s\",\"queryPid\":\"12345678\",\"queryMode\":4"
+			snprintf(szMsg, sizeof(szMsg), "{\"cmd\":15,\"session\":\"%s\",\"queryPid\":\"002\",\"queryMode\":4"
 				",\"seq\":1,\"datetime\":\"%s\"}", szSession, szDatetime);
 			sendMsg(sock, szMsg, strlen(szMsg));
 		}
@@ -836,6 +836,11 @@ void parse(RecvData * pRecvData)
 						printf("[PARSE]notice battery:%d\n", doc["battery"].GetInt());
 					}
 				}
+				if (doc.HasMember("status")) {
+					if (doc["status"].IsInt()) {
+						printf("[PARSE]notice status:%d\n", doc["status"].GetInt());
+					}
+				}
 				if (doc.HasMember("lat")) {
 					if (doc["lat"].IsDouble()) {
 						printf("[PARSE]notice lat:%.06f\n", doc["lat"].GetDouble());
@@ -858,62 +863,62 @@ void parse(RecvData * pRecvData)
 				}
 				break;
 			}
-      case 17: {
-        if (doc.HasMember("taskId")) {
-          if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
-            printf("[PARSE]notify task taskId=%s\n", doc["taskId"].GetString());
-          }
-        }
-        if (doc.HasMember("deviceId")) {
-          if (doc["deviceId"].IsString() && doc["deviceId"].GetStringLength()) {
-            printf("[PARSE]notify task deviceId=%s\n", doc["deviceId"].GetString());
-          }
-        }
-        if (doc.HasMember("guarder")) {
-          if (doc["guarder"].IsString() && doc["guarder"].GetStringLength()) {
-            printf("[PARSE]notify task guarder=%s\n", doc["guarder"].GetString());
-          }
-        }
-        if (doc.HasMember("target")) {
-          if (doc["target"].IsString() && doc["target"].GetStringLength()) {
-            printf("[PARSE]notify task target=%s\n", doc["target"].GetString());
-          }
-        }
-        if (doc.HasMember("destination")) {
-          if (doc["destination"].IsString() && doc["destination"].GetStringLength()) {
-            printf("[PARSE]notify task destination=%s\n", doc["destination"].GetString());
-          }
-        }
-        if (doc.HasMember("startTime")) {
-          if (doc["startTime"].IsString() && doc["startTime"].GetStringLength()) {
-            printf("[PARSE]notify task startTime=%s\n", doc["startTime"].GetString());
-          }
-        }
-        if (doc.HasMember("limit")) {
-          if (doc["limit"].IsInt()) {
-            printf("[PARSE]notify task limit=%d\n", doc["limit"].GetInt());
-          }
-        }
-        if (doc.HasMember("type")) {
-          if (doc["type"].IsInt()) {
-            printf("[PARSE]notify task type=%d\n", doc["type"].GetInt());
-          }
-        }
-        break;
-      }
-      case 18: {
-        if (doc.HasMember("taskId")) {
-          if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
-            printf("[PARSE]notify task close taskId=%s\n", doc["taskId"].GetString());
-          }
-        }
-        if (doc.HasMember("datetime")) {
-          if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
-            printf("[PARSE]notify task close datetime=%s\n", doc["datetime"].GetString());
-          }
-        }
-        break;
-      }
+			case 17: {
+				if (doc.HasMember("taskId")) {
+					if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
+						printf("[PARSE]notify task taskId=%s\n", doc["taskId"].GetString());
+					}
+				}
+				if (doc.HasMember("deviceId")) {
+					if (doc["deviceId"].IsString() && doc["deviceId"].GetStringLength()) {
+						printf("[PARSE]notify task deviceId=%s\n", doc["deviceId"].GetString());
+					}
+				}
+				if (doc.HasMember("guarder")) {
+					if (doc["guarder"].IsString() && doc["guarder"].GetStringLength()) {
+						printf("[PARSE]notify task guarder=%s\n", doc["guarder"].GetString());
+					}
+				}
+				if (doc.HasMember("target")) {
+					if (doc["target"].IsString() && doc["target"].GetStringLength()) {
+						printf("[PARSE]notify task target=%s\n", doc["target"].GetString());
+					}
+				}
+				if (doc.HasMember("destination")) {
+					if (doc["destination"].IsString() && doc["destination"].GetStringLength()) {
+						printf("[PARSE]notify task destination=%s\n", doc["destination"].GetString());
+					}
+				}
+				if (doc.HasMember("startTime")) {
+					if (doc["startTime"].IsString() && doc["startTime"].GetStringLength()) {
+						printf("[PARSE]notify task startTime=%s\n", doc["startTime"].GetString());
+					}
+				}
+				if (doc.HasMember("limit")) {
+					if (doc["limit"].IsInt()) {
+						printf("[PARSE]notify task limit=%d\n", doc["limit"].GetInt());
+					}
+				}
+				if (doc.HasMember("type")) {
+					if (doc["type"].IsInt()) {
+						printf("[PARSE]notify task type=%d\n", doc["type"].GetInt());
+					}
+				}
+				break;
+			}
+			case 18: {
+				if (doc.HasMember("taskId")) {
+					if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
+						printf("[PARSE]notify task close taskId=%s\n", doc["taskId"].GetString());
+					}
+				}
+				if (doc.HasMember("datetime")) {
+					if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+						printf("[PARSE]notify task close datetime=%s\n", doc["datetime"].GetString());
+					}
+				}
+				break;
+			}
       case 111: {
 				if (doc.HasMember("session")) {
 					if (doc["session"].IsString()) {

@@ -1,4 +1,4 @@
-﻿#include "escort_access.h"
+#include "escort_access.h"
 #include "access_concrete.h"
 #include <Windows.h>
 #include <map>
@@ -40,7 +40,7 @@ BOOL APIENTRY DllMain(void * hInst, unsigned long ulReason, void * pReserved)
 					AccessService * pService = iter->second;
 					if (pService) {
 						if (pService->GetStatus()) {
-							pService->StopAccessService();
+							pService->StopAccessService_v2();
 						}
 						delete pService;
 						pService = NULL;
@@ -122,6 +122,7 @@ unsigned long long __stdcall EA_Start(const char * pCfgFileName)
 			char * pAccessPort = readItem(kvList, "access_port");
 			char * pTaskClosseCheckStatus = readItem(kvList, "task_close_check_status");
 			char * pTaskFleeReplicatedReport = readItem(kvList, "task_flee_replicated_report");
+			char * pTaskEnableLooseCheck = readItem(kvList, "enable_task_loose_check");
 			char * pMidwareHost = readItem(kvList, "midware_ip");
 			char * pMidwarePubPort = readItem(kvList, "publish_port");
 			char * pMidwareTalkPort = readItem(kvList, "talk_port");
@@ -137,6 +138,7 @@ unsigned long long __stdcall EA_Start(const char * pCfgFileName)
 			unsigned short usDbProxyQryPort = 0;
 			int nTaskCloseCheckStatus = 0;
 			int nTaskFleeReplicatedReport = 0;
+			int nTaskEnableLooseCheck = 0;
 			if (pZkHost) {
 				strncpy_s(szZkHost, sizeof(szZkHost), pZkHost, strlen(pZkHost));
 				free(pZkHost);
@@ -158,6 +160,11 @@ unsigned long long __stdcall EA_Start(const char * pCfgFileName)
 				nTaskFleeReplicatedReport = atoi(pTaskFleeReplicatedReport);
 				free(pTaskFleeReplicatedReport);
 				pTaskFleeReplicatedReport = NULL;
+			}
+			if (pTaskEnableLooseCheck) {
+				nTaskEnableLooseCheck = atoi(pTaskEnableLooseCheck);
+				free(pTaskEnableLooseCheck);
+				pTaskEnableLooseCheck = NULL;
 			}
 			if (pMidwareHost) {
 				strncpy_s(szMidwareHost, sizeof(szMidwareHost), pMidwareHost, strlen(pMidwareHost));
@@ -181,10 +188,11 @@ unsigned long long __stdcall EA_Start(const char * pCfgFileName)
 			}
 			AccessService * pService = new AccessService(szZkHost, g_szDllDir);
 			if (pService) {
-				if (pService->StartAccessService(szAccessHost, usAccessPort, szMidwareHost, usMidwarePubPort, 
-					usMidwareTalkPort, szDbProxyHost, usDbProxyQryPort) == 0) {
+				if (pService->StartAccessService_v2(szAccessHost, usAccessPort, szMidwareHost, 
+					usMidwarePubPort, usMidwareTalkPort) == 0) {
 					pService->SetParameter(access_service::E_PARAM_TASK_CLOSE_CHECK_STATUS, nTaskCloseCheckStatus);
 					pService->SetParameter(access_service::E_PARAM_TASK_FLEE_REPORT_REPLICATED, nTaskFleeReplicatedReport);
+					pService->SetParameter(access_service::E_PARAM_ENABLE_TASK_LOOSE_CHECK, nTaskEnableLooseCheck);
 					unsigned long long ullVal = (unsigned long long)pService;
 					pthread_mutex_lock(&g_mutex4InstList);
 					g_instList.insert(std::make_pair(ullVal, pService));
@@ -210,7 +218,7 @@ int __stdcall EA_Stop(unsigned long long ullInst_)
 		if (iter != g_instList.end()) {
 			AccessService * pService = iter->second;
 			if (pService) {
-				result = pService->StopAccessService();
+				result = pService->StopAccessService_v2();
 				delete pService;
 				pService = NULL;
 			}
