@@ -56,6 +56,8 @@ char szDeviceId[20] = { 0 };
 bool bConnected = false;
 char szUser[64] = { 0 };
 char szPasswd[64] = { 0 };
+char szHandset[32] = { 0 };
+char szTargetId[32] = { 0 };
 
 #define MAKEHEAD(x) {x.mark[0] = 'E';x.mark[1]='C';x.version[0]='1';x.version[1]='0';}
 
@@ -232,19 +234,22 @@ void sendMsg(SOCKET sock, const char * pMsg, size_t nMsgSize)
 		size_t nUtf8MsgSize = strUtf8Msg.size();
 		msgHead.uiLen = (unsigned int)nUtf8MsgSize;
 		size_t nHeadSize = sizeof(MessageHead);
-		unsigned int nBufLen = (unsigned int)(nUtf8MsgSize + nHeadSize);
-		unsigned char * pBuf = (unsigned char *)malloc(nBufLen + 1);
-		memcpy_s(pBuf, nHeadSize, &msgHead, nHeadSize);
-		memcpy_s(pBuf + nHeadSize, nUtf8MsgSize, strUtf8Msg.c_str(), nUtf8MsgSize);
-		pBuf[nBufLen] = '\0';
-		for (unsigned int i = (unsigned int)nHeadSize; i < nBufLen; i++) {
-			pBuf[i] += 1;
-			pBuf[i] ^= '8';
+		size_t nBufLen = nUtf8MsgSize + nHeadSize;
+		unsigned char * pBuf = (unsigned char *)malloc( nBufLen + 1);
+		if (pBuf) {
+			memcpy_s(pBuf, nHeadSize + 1, &msgHead, nHeadSize);
+			memcpy_s(pBuf + nHeadSize, nUtf8MsgSize, strUtf8Msg.c_str(), nUtf8MsgSize);
+			pBuf[nBufLen] = '\0';
+			for (size_t i = (unsigned int)nHeadSize; i < nBufLen; i++) {
+				pBuf[i] += 1;
+				pBuf[i] ^= '8';
+			}
+			if (send(sock, (const char*)pBuf, (int)nBufLen, 0) == SOCKET_ERROR) {
+				bConnected = true;
+			}
+			free(pBuf);
+			pBuf = nullptr;
 		}
-		if (send(sock, (const char *)pBuf, nBufLen, 0) == SOCKET_ERROR) {
-			bConnected = true;
-		}
-		free(pBuf);
 	}
 }
 
@@ -274,7 +279,7 @@ void send_func(SOCKET sock)
 			if (!bLogin) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":1,\"account\":\"%s\",\"passwd\":\"%s\",\"datetime\":\"%s\","
-					"\"handset\":\"\"}", szUser, szPasswd, szDatetime);
+					"\"handset\":\"%s\",\"phone\":\"13356782314\"}", szUser, szPasswd, szDatetime, szHandset);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -319,9 +324,8 @@ void send_func(SOCKET sock)
 			if (bLogin && bBind) {
 				char szMsg[256] = { 0 };
 				snprintf(szMsg, sizeof(szMsg), "{\"cmd\":5,\"session\":\"%s\",\"type\":1,\"limit\":1,"
-					"\"destination\":\"dest\",\"target\":\"35529120010221131&gggg\","
-					"\"datetime\":\"%s\"}", 
-					szSession, szDatetime);
+					"\"destination\":\"dest\",\"target\":\"%s&gggg\",\"datetime\":\"%s\"}", 
+					szSession, szTargetId, szDatetime);
 				sendMsg(sock, szMsg, strlen(szMsg));
 			}
 			else {
@@ -379,16 +383,16 @@ void send_func(SOCKET sock)
 				char szMsg[256] = { 0 };
 				if (!bModifyEncrypt) {
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":12,\"session\":\"%s\",\"currPasswd\":\"%s\","
-						"\"newPasswd\":\"%s\",\"datetime\":\"%s\"}", szSession, "3cf2bc71982179c0d0944dee43f"
-						"b23d2", "123456", szDatetime);
+						"\"newPasswd\":\"%s\",\"datetime\":\"%s\"}", szSession, "3cf2bc71982179c0d0944dee43fb23d2",
+						"123456", szDatetime);
 					sendMsg(sock, szMsg, strlen(szMsg));
 					bModifyEncrypt = true;
 					printf("[SEND]modify passwd to decrypt\n");
 				}
 				else {
 					snprintf(szMsg, sizeof(szMsg), "{\"cmd\":12,\"session\":\"%s\",\"currPasswd\":\"%s\","
-						"\"newPasswd\":\"%s\",\"datetime\":\"%s\"}", szSession, "123456", "3cf2bc71982179c0d"
-						"0944dee43fb23d2", szDatetime);
+						"\"newPasswd\":\"%s\",\"datetime\":\"%s\"}", szSession, "123456", "3cf2bc71982179c0d0944dee43fb23d2",
+						szDatetime);
 					sendMsg(sock, szMsg, strlen(szMsg));
 					bModifyEncrypt = false;
 					printf("[SEND]modify passwd to encrypt\n");
@@ -719,6 +723,7 @@ void parse(RecvData * pRecvData)
 					std::unique_lock<std::mutex> lock(mutex4AppPos);
 					bTask = false;
 					szTask[0] = '\0';
+					bBind = false;
 				}
 				else {
 					printf("[PARSE]task close failed, retcode=%d\n", nRet);
@@ -861,6 +866,11 @@ void parse(RecvData * pRecvData)
 						printf("[PARSE]notice datetime:%s\n", doc["datetime"].GetString());
 					}
 				}
+				if (doc.HasMember("online")) {
+					if (doc["online"].IsInt()) {
+						printf("[PARSE]notice online:%d\n", doc["online"].GetInt());
+					}
+				}
 				break;
 			}
 			case 17: {
@@ -909,7 +919,14 @@ void parse(RecvData * pRecvData)
 			case 18: {
 				if (doc.HasMember("taskId")) {
 					if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
-						printf("[PARSE]notify task close taskId=%s\n", doc["taskId"].GetString());
+						char szNotifyTaskId[16] = { 0 };
+						strcpy_s(szNotifyTaskId, 16, doc["taskId"].GetString());
+						printf("[PARSE]notify task close taskId=%s\n", szNotifyTaskId);
+						if (strcmp(szNotifyTaskId, szTask) == 0) {
+							szTask[0] = '\0';
+							bTask = false;
+							bBind = false;
+						}
 					}
 				}
 				if (doc.HasMember("datetime")) {
@@ -1399,6 +1416,8 @@ int main(int argc, char ** argv)
 		char *pDevice = readItem(kvList, "device");
 		char * pUser = readItem(kvList, "user");
 		char * pPwd = readItem(kvList, "passwd");
+		char * pHandset = readItem(kvList, "handset");
+		char * pPid = readItem(kvList, "personId");
 		if (pIp) {
 			if (strlen(pIp) > 0) {
 				strcpy_s(szSrvIp, sizeof(szSrvIp), pIp);
@@ -1429,6 +1448,20 @@ int main(int argc, char ** argv)
 			}
 			free(pPwd);
 		}
+		if (pHandset) {
+			strcpy_s(szHandset, sizeof(szHandset), pHandset);
+			free(pHandset);
+			pHandset = NULL;
+		}
+		if (pPid) {
+			strcpy_s(szTargetId, sizeof(szTargetId), pPid);
+			free(pPid);
+			pPid = NULL;
+		}
+		else {
+			strcpy_s(szTargetId, sizeof(szTargetId), "target0");
+		}
+
 	}
 	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (argc > 1) {
@@ -1480,6 +1513,7 @@ int main(int argc, char ** argv)
 			bBind = false;
 			bTask = false;
 			bConnected = true;
+			bKeepAlive = true;
 			std::thread recvThd = std::thread(recv_func, sock);
 			std::thread sndThd = std::thread(send_func, sock);
 			std::thread parseThd = std::thread(parse_func);
