@@ -1233,7 +1233,12 @@ void AccessService::parseAccAppMsg(access_service::AccessAppMessage * pMsg_)
 									}
 									if (doc.HasMember("coordinate")) {
 										if (doc["coordinate"].IsInt()) {
-											posInfo.nCoordinate = doc["coordinate"].GetInt();
+											int nCoordinate = doc["coordinate"].GetInt();
+											switch (nCoordinate) {
+												case 1: posInfo.nCoordinate = COORDINATE_GCJ02; break;
+												case 2: posInfo.nCoordinate = COORDINATE_BD09; break;
+												default: posInfo.nCoordinate = COORDINATE_WGS84; break;
+											}
 										}
 									}
 									if (doc["datetime"].IsString()) {
@@ -6598,9 +6603,9 @@ void AccessService::dealInteractionMsg()
 															zhash_update(g_deviceList, pDevice->deviceBasic.szDeviceId, pDevice);
 															zhash_freefn(g_deviceList, pDevice->deviceBasic.szDeviceId, free);
 															sprintf_s(szLog, sizeof(szLog), "%s[%d]load deviceId=%s, online=%d, loose=%d, battery=%d, "
-																"org=%s\n", __FUNCTION__, __LINE__, pDevice->deviceBasic.szDeviceId,
+																"status=%d, org=%s\n", __FUNCTION__, __LINE__, pDevice->deviceBasic.szDeviceId,
 																pDevice->deviceBasic.nOnline, pDevice->deviceBasic.nLooseStatus,
-																pDevice->deviceBasic.nBattery, pDevice->deviceBasic.szOrgId);
+																pDevice->deviceBasic.nBattery, pDevice->deviceBasic.nStatus, pDevice->deviceBasic.szOrgId);
 															LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 														}
 														else {
