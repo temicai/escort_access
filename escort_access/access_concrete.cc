@@ -3261,8 +3261,9 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 	char szLog[512] = { 0 };
 	int nErr = E_OK;
 	char szReply[256] = { 0 };
+	char szCurrentTask[16] = { 0 };
 	if (!getLoadSessionFlag()) {
-		sprintf_s(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d}",
+		sprintf_s(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d,\"taskId\":\"\"}",
 			access_service::E_CMD_KEEPALIVE_REPLY, pKeepAlive_->szSession, pKeepAlive_->uiSeq, E_SERVER_RESOURCE_NOT_READY);
 		sendDataToEndpoint_v2(szReply, (uint32_t)strlen(szReply), pEndpoint_, access_service::E_ACC_DATA_TRANSFER, pFrom_);
 		sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]receive alive from %s, session=%s, "
@@ -3282,10 +3283,7 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 		nErr = E_INVALIDSESSION;
 	}
 	pthread_mutex_unlock(&m_mutex4LinkList);
-	sprintf_s(szReply, 256, "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d}",
-		access_service::E_CMD_KEEPALIVE_REPLY, pKeepAlive_->szSession, pKeepAlive_->uiSeq, nErr);
-	uint32_t nReplyLen = (uint32_t)strlen(szReply);
-	sendDataToEndpoint_v2(szReply, nReplyLen, pEndpoint_, access_service::E_ACC_DATA_TRANSFER, pFrom_);
+	
 	if (nErr == E_OK) {
 		bool bUpdateLink = false;
 		char szGuarder[20] = { 0 };
@@ -3293,6 +3291,7 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 		char szSubTopic[64] = { 0 };
 		char szDeviceId[20] = { 0 };
 		char szLastLink[32] = { 0 };
+		
 		unsigned long long now = time(NULL);
 		pthread_mutex_lock(&m_mutex4LinkList);
 		if (zhash_size(m_linkList)) {
@@ -3326,6 +3325,7 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 				if (strcmp(pGuarder->szLink, pEndpoint_) != 0) {
 					strcpy_s(pGuarder->szLink, sizeof(pGuarder->szLink), pEndpoint_);
 				}
+				strcpy_s(szCurrentTask, sizeof(szCurrentTask), pGuarder->szTaskId);
 			}
 			pthread_mutex_unlock(&g_mutex4GuarderList);
 		}
@@ -3383,6 +3383,10 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 		unsigned short usStatus = 0;
 		int nCoordinate = 0;
 		int nOnline = 0;
+		sprintf_s(szReply, 256, "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d,\"taskId\":\"%s\"}",
+			access_service::E_CMD_KEEPALIVE_REPLY, pKeepAlive_->szSession, pKeepAlive_->uiSeq, nErr, szCurrentTask);
+		uint32_t nReplyLen = (uint32_t)strlen(szReply);
+		sendDataToEndpoint_v2(szReply, nReplyLen, pEndpoint_, access_service::E_ACC_DATA_TRANSFER, pFrom_);
 		if (strlen(szDeviceId)) {
 			pthread_mutex_lock(&g_mutex4DevList);
 			if (zhash_size(g_deviceList)) {
@@ -3402,11 +3406,9 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 				sprintf_s(szMsg1, sizeof(szMsg1), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
 					"\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY, pKeepAlive_->szSession, 
 					access_service::E_NOTIFY_DEVICE_OFFLINE, szDeviceId, szDatetime);
-				sendDataToEndpoint_v2(szMsg1, (uint32_t)strlen(szMsg1), pEndpoint_, access_service::E_ACC_DATA_DISPATCH,
-					pFrom_);
-				sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]send offline, endpoint=%s, session=%s,"
-					" deviceId=%s, datetime=%s\n", __FUNCTION__, __LINE__, pEndpoint_, pKeepAlive_->szSession, 
-					szDeviceId, szDatetime);
+				sendDataToEndpoint_v2(szMsg1, (uint32_t)strlen(szMsg1), pEndpoint_, access_service::E_ACC_DATA_DISPATCH, pFrom_);
+				sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]send offline, endpoint=%s, session=%s, deviceId=%s, "
+					"datetime=%s\n", __FUNCTION__, __LINE__, pEndpoint_, pKeepAlive_->szSession, szDeviceId, szDatetime);
 				LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 			}		
 			char szMsg[256] = { 0 };
@@ -3414,17 +3416,22 @@ void AccessService::handleAppKeepAlive(access_service::AppKeepAlive * pKeepAlive
 				"\"battery\":%u,\"status\":%u,\"online\":%d,\"datetime\":\"%s\"}", access_service::E_CMD_MSG_NOTIFY,
 				pKeepAlive_->szSession, access_service::E_NOTIFY_DEVICE_INFO, szDeviceId, usBattery,
 				usStatus, nOnline, szDatetime);
-			sendDataToEndpoint_v2(szMsg, (uint32_t)strlen(szMsg), pEndpoint_, access_service::E_ACC_DATA_DISPATCH,
-				pFrom_);
-			sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]send status, endpoint=%s, session=%s, "
-				"deviceId=%s, battery=%u, status=%u, online=%d, datetime=%s\n", __FUNCTION__, __LINE__,
-				pEndpoint_, pKeepAlive_->szSession, szDeviceId, usBattery, usStatus, nOnline, szDatetime);
+			sendDataToEndpoint_v2(szMsg, (uint32_t)strlen(szMsg), pEndpoint_, access_service::E_ACC_DATA_DISPATCH, pFrom_);
+			sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]send status, endpoint=%s, session=%s, deviceId=%s, "
+				"battery=%u, status=%u, online=%d, datetime=%s\n", __FUNCTION__, __LINE__, pEndpoint_, pKeepAlive_->szSession,
+				szDeviceId, usBattery, usStatus, nOnline, szDatetime);
 			LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);		
 		}
 	}
-	sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]report keep alive, from=%s, session=%s, "
-		" seq=%u, datetime=%s, retcode=%d\n", __FUNCTION__, __LINE__, pEndpoint_, pKeepAlive_->szSession,
-		pKeepAlive_->uiSeq, pKeepAlive_->szDatetime, nErr);
+	else {
+		sprintf_s(szReply, 256, "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d,\"taskId\":\"\"}",
+			access_service::E_CMD_KEEPALIVE_REPLY, pKeepAlive_->szSession, pKeepAlive_->uiSeq, nErr);
+		uint32_t nReplyLen = (uint32_t)strlen(szReply);
+		sendDataToEndpoint_v2(szReply, nReplyLen, pEndpoint_, access_service::E_ACC_DATA_TRANSFER, pFrom_);
+	}
+	sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]report keep alive, from=%s, session=%s, seq=%u, datetime=%s,"
+		" retcode=%d\n", __FUNCTION__, __LINE__, pEndpoint_, pKeepAlive_->szSession, pKeepAlive_->uiSeq, 
+		pKeepAlive_->szDatetime, nErr);
 	LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 }
 
@@ -7724,6 +7731,10 @@ int AccessService::handleTopicTaskSubmitMsg(TopicTaskMessage * pMsg_, const char
 	int result = E_OK;
 	if (pMsg_) {
 		char szLog[512] = { 0 };
+		sprintf_s(szLog, sizeof(szLog), "[access]%s[%u]recv task start message, taskId=%s, deviceId=%s, guarder=%s, org=%s, "
+			"target=%s, handset=%s\n", __FUNCTION__, __LINE__, pMsg_->szTaskId, pMsg_->szDeviceId, pMsg_->szGuarder, pMsg_->szOrg, 
+			pMsg_->szTarget, pMsg_->szHandset);
+		LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		if (strlen(pMsg_->szTaskId) && strlen(pMsg_->szDeviceId) && strlen(pMsg_->szGuarder)) {
 			char szEndpoint[40] = { 0 };
 			char szSession[40] = { 0 };

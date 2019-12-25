@@ -712,12 +712,12 @@ void parse(RecvData * pRecvData)
 				if (nRet == 0) {
 					if (doc.HasMember("session")) {
 						if (doc["session"].IsString()) {
-							printf("[PARSE]task session:%s\n", doc["session"].GetString());
+							printf("[PARSE: closeTask]task session:%s\n", doc["session"].GetString());
 						}
 					}
 					if (doc.HasMember("taskId")) {
 						if (doc["taskId"].IsString()) {
-							printf("[PARSE]task: %s\n", doc["taskId"].GetString());
+							printf("[PARSE: closeTask]task: %s\n", doc["taskId"].GetString());
 						}
 					}
 					std::unique_lock<std::mutex> lock(mutex4AppPos);
@@ -726,7 +726,7 @@ void parse(RecvData * pRecvData)
 					bBind = false;
 				}
 				else {
-					printf("[PARSE]task close failed, retcode=%d\n", nRet);
+					printf("[PARSE: closeTask]task close failed, retcode=%d\n", nRet);
 					if (nRet == 10) {
 						szSession[0] = '\0';
 						bLogin = false;
@@ -737,22 +737,22 @@ void parse(RecvData * pRecvData)
 			case 107: {
 				if (doc.HasMember("session")) {
 					if (doc["session"].IsString()) {
-						printf("[PARSE]session=%s\n", doc["session"].GetString());
+						printf("[PARSE: Position Reply]session=%s\n", doc["session"].GetString());
 					}
 				}
 				if (doc.HasMember("retcode")) {
 					if (doc["retcode"].IsInt()) {
-						printf("[PARSE]retcode=%d\n", doc["retcode"].GetInt());
+						printf("[PARSE: Position Reply]retcode=%d\n", doc["retcode"].GetInt());
 					}
 				}
 				if (doc.HasMember("taskId")) {
 					if (doc["taskId"].IsString()) {
-						printf("[PARSE]taskId=%s\n", doc["taskId"].GetString());
+						printf("[PARSE: Position Reply]taskId=%s\n", doc["taskId"].GetString());
 					}
 				}
 				if (doc.HasMember("datetime")) {
 					if (doc["datetime"].IsString()) {
-						printf("[PARSE]datetime=%s\n", doc["datetime"].GetString());
+						printf("[PARSE: Position Reply]datetime=%s\n", doc["datetime"].GetString());
 					}
 				}
 				break;
@@ -766,7 +766,7 @@ void parse(RecvData * pRecvData)
 				if (nRet == 0) {
 					if (doc.HasMember("session")) {
 						if (doc["session"].IsString()) {
-							printf("[PARSE]flee task session:%s\n", doc["session"].GetString());
+							printf("[PARSE: Flee Reply]flee task session:%s\n", doc["session"].GetString());
 						}
 					}
 					if (doc.HasMember("taskId")) {
@@ -774,13 +774,13 @@ void parse(RecvData * pRecvData)
 							size_t nSize = doc["taskId"].GetStringLength();
 							if (nSize) {
 								strncpy_s(szTask, sizeof(szTask), doc["taskId"].GetString(), nSize);
-								printf("[PARSE]flee task: %s\n", szTask);
+								printf("[PARSE: Flee Reply]flee task: %s\n", szTask);
 							}
 						}
 					}
 				}
 				else {
-					printf("[PARSE]flee failed, retcode=%d\n", nRet);
+					printf("[PARSE: Flee Reply]flee failed, retcode=%d\n", nRet);
 					if (nRet == 10) {
 						szSession[0] = '\0';
 						bLogin = false;
@@ -797,17 +797,17 @@ void parse(RecvData * pRecvData)
 				if (nRet == 0) {
 					if (doc.HasMember("session")) {
 						if (doc["session"].IsString()) {
-							printf("[PARSE]revoke flee task session:%s\n", doc["session"].GetString());
+							printf("[PARSE: Flee Revoke Reply]revoke flee task session:%s\n", doc["session"].GetString());
 						}
 					}
 					if (doc.HasMember("taskId")) {
 						if (doc["taskId"].IsString()) {
-							printf("[PARSE]revoke flee task:%s\n", doc["taskId"].GetString());
+							printf("[PARSE: Flee Revoke Reply]revoke flee task:%s\n", doc["taskId"].GetString());
 						}
 					}
 				}
 				else {
-					printf("[PARSE]revoke flee failed, retcode=%d\n", nRet);
+					printf("[PARSE: Flee Revoke Reply]revoke flee failed, retcode=%d\n", nRet);
 					if (nRet == 10) {
 						szSession[0] = '\0';
 						bLogin = false;
@@ -876,42 +876,42 @@ void parse(RecvData * pRecvData)
 			case 17: {
 				if (doc.HasMember("taskId")) {
 					if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
-						printf("[PARSE]notify task taskId=%s\n", doc["taskId"].GetString());
+						printf("[PARSE: notify task start]notify task taskId=%s\n", doc["taskId"].GetString());
 					}
 				}
 				if (doc.HasMember("deviceId")) {
 					if (doc["deviceId"].IsString() && doc["deviceId"].GetStringLength()) {
-						printf("[PARSE]notify task deviceId=%s\n", doc["deviceId"].GetString());
+						printf("[PARSE: notify task start]notify task deviceId=%s\n", doc["deviceId"].GetString());
 					}
 				}
 				if (doc.HasMember("guarder")) {
 					if (doc["guarder"].IsString() && doc["guarder"].GetStringLength()) {
-						printf("[PARSE]notify task guarder=%s\n", doc["guarder"].GetString());
+						printf("[PARSE: notify task start]notify task guarder=%s\n", doc["guarder"].GetString());
 					}
 				}
 				if (doc.HasMember("target")) {
 					if (doc["target"].IsString() && doc["target"].GetStringLength()) {
-						printf("[PARSE]notify task target=%s\n", doc["target"].GetString());
+						printf("[PARSE: notify task start]notify task target=%s\n", doc["target"].GetString());
 					}
 				}
 				if (doc.HasMember("destination")) {
 					if (doc["destination"].IsString() && doc["destination"].GetStringLength()) {
-						printf("[PARSE]notify task destination=%s\n", doc["destination"].GetString());
+						printf("[PARSE: notify task start]notify task destination=%s\n", doc["destination"].GetString());
 					}
 				}
 				if (doc.HasMember("startTime")) {
 					if (doc["startTime"].IsString() && doc["startTime"].GetStringLength()) {
-						printf("[PARSE]notify task startTime=%s\n", doc["startTime"].GetString());
+						printf("[PARSE: notify task start]notify task startTime=%s\n", doc["startTime"].GetString());
 					}
 				}
 				if (doc.HasMember("limit")) {
 					if (doc["limit"].IsInt()) {
-						printf("[PARSE]notify task limit=%d\n", doc["limit"].GetInt());
+						printf("[PARSE: notify task start]notify task limit=%d\n", doc["limit"].GetInt());
 					}
 				}
 				if (doc.HasMember("type")) {
 					if (doc["type"].IsInt()) {
-						printf("[PARSE]notify task type=%d\n", doc["type"].GetInt());
+						printf("[PARSE: notify task start]notify task type=%d\n", doc["type"].GetInt());
 					}
 				}
 				break;
@@ -921,7 +921,7 @@ void parse(RecvData * pRecvData)
 					if (doc["taskId"].IsString() && doc["taskId"].GetStringLength()) {
 						char szNotifyTaskId[16] = { 0 };
 						strcpy_s(szNotifyTaskId, 16, doc["taskId"].GetString());
-						printf("[PARSE]notify task close taskId=%s\n", szNotifyTaskId);
+						printf("[PARSE: notify task stop]notify task close taskId=%s\n", szNotifyTaskId);
 						if (strcmp(szNotifyTaskId, szTask) == 0) {
 							szTask[0] = '\0';
 							bTask = false;
@@ -931,7 +931,7 @@ void parse(RecvData * pRecvData)
 				}
 				if (doc.HasMember("datetime")) {
 					if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
-						printf("[PARSE]notify task close datetime=%s\n", doc["datetime"].GetString());
+						printf("[PARSE: notify task stop]notify task close datetime=%s\n", doc["datetime"].GetString());
 					}
 				}
 				break;
@@ -939,17 +939,22 @@ void parse(RecvData * pRecvData)
       case 111: {
 				if (doc.HasMember("session")) {
 					if (doc["session"].IsString()) {
-						printf("[PARSE]session: %s\n", doc["session"].GetString());
+						printf("[PARSE: alive]session: %s\n", doc["session"].GetString());
 					}
 				}
 				if (doc.HasMember("seq")) {
 					if (doc["seq"].IsInt()) {
-						printf("[PARSE]seq=%d\n", doc["seq"].GetInt());
+						printf("[PARSE: alive]seq=%d\n", doc["seq"].GetInt());
 					}
 				}
 				if (doc.HasMember("retcode")) {
 					if (doc["retcode"].IsInt()) {
-						printf("[PARSE]retcode=%d\n", doc["retcode"].GetInt());
+						printf("[PARSE: alive]retcode=%d\n", doc["retcode"].GetInt());
+					}
+				}
+				if (doc.HasMember("taskId")) {
+					if (doc["taskId"].IsString()) {
+						printf("[PARSE: alive]taskId=%s\n", doc["taskId"].GetString());
 					}
 				}
 				
