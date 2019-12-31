@@ -114,9 +114,11 @@ void zk_escort_create_completion(int rc, const char * name, const void * data)
 			break;
 		}
 		case ZOK: {
+			printf("/escort ok\n");
 			break;
 		}
 		case ZNODEEXISTS: {
+			printf("/escort exists\n");
 			break;
 		}
 	}
@@ -135,9 +137,11 @@ void zk_access_create_completion(int rc, const char * name, const void * data)
 			break;
 		}
 		case ZOK: {
+			printf("/escort/access ok\n");
 			break;
 		}
 		case ZNODEEXISTS: {
+			printf("/escort/access exists\n");
 			break;
 		}
 		default: break;
@@ -267,6 +271,13 @@ void zk_session_create_completion(int rc, const char * name, const void * data)
 				zk_session_create_completion, data);
 		}
 	}
+	else if (rc == ZOK) {
+		printf("/escort/session ok\n");
+	}
+	else if (rc == ZNODEEXISTS) {
+		printf("/escort/session exists\n");
+	}
+
 }
 
 void zk_session_get_children_watcher(zhandle_t * zh, int type, int state, const char * path,
@@ -3879,15 +3890,14 @@ void AccessService::handleAppDeviceCommand(access_service::AppDeviceCommandInfo 
 			pthread_mutex_unlock(&m_mutex4LinkDataList);
 		}
 	}
-	sprintf_s(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d,"
-		"\"datetime\":\"%s\",\"deviceId\":\"%s\"}", access_service::E_CMD_DEVICE_COMMAND_REPLY,
-		cmdInfo_.szSession, cmdInfo_.nSeq, nErr, cmdInfo_.szDatetime, cmdInfo_.szDeviceId);
-	int nRetVal = sendDataToEndpoint_v2(szReply, (uint32_t)strlen(szReply), pEndpoint_, 
-		access_service::E_ACC_DATA_TRANSFER, pFrom_);
+	sprintf_s(szReply, sizeof(szReply), "{\"cmd\":%d,\"session\":\"%s\",\"seq\":%lu,\"retcode\":%d,\"datetime\":\"%s\","
+		"\"deviceId\":\"%s\"}", access_service::E_CMD_DEVICE_COMMAND_REPLY, cmdInfo_.szSession, cmdInfo_.nSeq, nErr, 
+		cmdInfo_.szDatetime, cmdInfo_.szDeviceId);
+	sendDataToEndpoint_v2(szReply, (uint32_t)strlen(szReply), pEndpoint_, access_service::E_ACC_DATA_TRANSFER, pFrom_);
 	sprintf_s(szLog, sizeof(szLog), "[access_service]%s[%d]send device command from %s, deviceId=%s, "
-		"session=%s, param1=%d, param2=%d, seq=%d, datetime=%s, retcode=%d, reply code=%d\n", 
+		"session=%s, param1=%d, param2=%d, seq=%d, datetime=%s, retcode=%d\n", 
 		__FUNCTION__, __LINE__, pEndpoint_, cmdInfo_.szDeviceId, cmdInfo_.szSession, cmdInfo_.nParam1,
-		cmdInfo_.nParam2, cmdInfo_.nSeq, cmdInfo_.szDatetime, nErr, nRetVal);
+		cmdInfo_.nParam2, cmdInfo_.nSeq, cmdInfo_.szDatetime, nErr);
 	LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 }
 
@@ -3960,11 +3970,10 @@ void AccessService::handleAppQueryTaskList(access_service::AppQueryTaskList * pQ
 		while (pTask) {
 			if (orgList.count(std::string(pTask->szOrg))) {
 				char szCellTask[512] = { 0 };
-				sprintf_s(szCellTask, sizeof(szCellTask), "{\"taskId\":\"%s\",\"deviceId\":\"%s\","
-					"\"guarder\":\"%s\",\"target\":\"%s\",\"destination\":\"%s\",\"type\":%d,\"limit\":%d,"
-					"\"startTime\":\"%s\"}", pTask->szTaskId, pTask->szDeviceId, pTask->szGuarder,
-					pTask->szTarget, pTask->szDestination, pTask->nTaskType, pTask->nTaskLimitDistance,
-					pTask->szTaskStartTime);
+				sprintf_s(szCellTask, sizeof(szCellTask), "{\"taskId\":\"%s\",\"deviceId\":\"%s\",\"guarder\":\"%s\","
+					"\"target\":\"%s\",\"destination\":\"%s\",\"type\":%d,\"limit\":%d,\"startTime\":\"%s\"}", 
+					pTask->szTaskId, pTask->szDeviceId, pTask->szGuarder, pTask->szTarget, pTask->szDestination, 
+					pTask->nTaskType, pTask->nTaskLimitDistance, pTask->szTaskStartTime);
 				if (strTaskList.empty()) {
 					strTaskList = std::string(szCellTask);
 				}
@@ -3982,11 +3991,10 @@ void AccessService::handleAppQueryTaskList(access_service::AppQueryTaskList * pQ
 		EscortTask * pTask = (EscortTask *)zhash_first(g_taskList);
 		while (pTask) {
 			char szCellTask[512] = { 0 };
-			sprintf_s(szCellTask, sizeof(szCellTask), "{\"taskId\":\"%s\",\"deviceId\":\"%s\","
-				"\"guarder\":\"%s\",\"target\":\"%s\",\"destination\":\"%s\",\"type\":%d,\"limit\":%d,"
-				"\"startTime\":\"%s\"}", pTask->szTaskId, pTask->szDeviceId, pTask->szGuarder, 
-				pTask->szTarget, pTask->szDestination, pTask->nTaskType, pTask->nTaskLimitDistance,
-				pTask->szTaskStartTime);
+			sprintf_s(szCellTask, sizeof(szCellTask), "{\"taskId\":\"%s\",\"deviceId\":\"%s\",\"guarder\":\"%s\","
+				"\"target\":\"%s\",\"destination\":\"%s\",\"type\":%d,\"limit\":%d,\"startTime\":\"%s\"}", 
+				pTask->szTaskId, pTask->szDeviceId, pTask->szGuarder, pTask->szTarget, pTask->szDestination, 
+				pTask->nTaskType, pTask->nTaskLimitDistance, pTask->szTaskStartTime);
 			if (strTaskList.empty()) {
 				strTaskList = std::string(szCellTask);
 			}
@@ -7297,11 +7305,26 @@ int AccessService::handleTopicLocateLbsMsg(TopicLocateMessageLbs * pMsg, const c
 				pthread_mutex_unlock(&m_mutex4SubscribeList);
 				bool bSend = false;
 				if (bFindSub) {
+					int nCvtCoordinate = 0;
+					switch (pMsg->nCoordinate) {
+						case COORDINATE_BD09: {
+							nCvtCoordinate = COORDINATE_GCJ02;
+							break;
+						}
+						case COORDINATE_GCJ02: {
+							nCvtCoordinate = COORDINATE_BD09;
+							break;
+						}
+						default: {
+							nCvtCoordinate = COORDINATE_WGS84;
+							break;
+						}
+					}
 					char szMsg[512] = { 0 };
 					sprintf_s(szMsg, sizeof(szMsg), "{\"cmd\":%d,\"session\":\"%s\",\"msgType\":%d,\"deviceId\":\"%s\","
 						"\"battery\":%u,\"status\":%u,\"lat\":%f,\"lng\":%f,\"coordinate\":%d,\"datetime\":\"%s\"}",
 						access_service::E_CMD_MSG_NOTIFY, szSession, access_service::E_NOTIFY_DEVICE_POSITION, pMsg->szDeviceId, 
-						usBattery, usStatus, pMsg->dLat, pMsg->dLng, pMsg->nCoordinate, szDatetime);
+						usBattery, usStatus, pMsg->dLat, pMsg->dLng, nCvtCoordinate, szDatetime);
 					if (usFormat == LOGIN_FORMAT_TCP_SOCKET) {
 						if (strlen(szEndpoint)) {
 							if (sendDataToEndpoint_v2(szMsg, (uint32_t)strlen(szMsg), szEndpoint, access_service::E_ACC_DATA_DISPATCH,
